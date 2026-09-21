@@ -32,6 +32,32 @@ class PlayerController: UIViewController {
     private let logTextView = UITextView()
     private let copyButton = UIButton(type: .system)
     private let retryButton = UIButton(type: .system)
+    
+    // Auto-Skip properties
+    private var aniSkipResult: AniSkipResult?
+    private let skipButton = UIButton(type: .system)
+    private let skipToastLabel = UILabel()
+    private var currentSkipTarget: Double?
+    private var lastIntroSkip: Double = -1
+    private var lastOutroSkip: Double = -1
+    private var isAutoSkipIntro: Bool {
+        if UserDefaults.standard.object(forKey: "auto_skip_intro") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "auto_skip_intro")
+    }
+    private var isAutoSkipOutro: Bool {
+        if UserDefaults.standard.object(forKey: "auto_skip_outro") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "auto_skip_outro")
+    }
+
+    // Gesture HUD Indicators
+    private let gestureHudContainer = UIView()
+    private let gestureHudIcon = UIImageView()
+    private let gestureHudLabel = UILabel()
+    private let gestureHudProgress = UIProgressView(progressViewStyle: .default)
+    private var gestureHudDismissWork: DispatchWorkItem?
+    private let seekRippleIndicator = UIView()
+    private let seekRippleLabel = UILabel()
+    private let seekRippleIcon = UIImageView()
 
     private weak var currentPlayer: AVPlayer?
     private weak var currentPlayerVC: AVPlayerViewController?
@@ -48,6 +74,8 @@ class PlayerController: UIViewController {
         view.backgroundColor = .black
 
         setupLoadingUI()
+        setupSkipUI()
+        setupGestureHudUI()
         setupNavBarItems()
         setupGestureHandler()
         updateEpisodeInfo()
@@ -184,6 +212,18 @@ class PlayerController: UIViewController {
             self.showFailure()
             return
         }
+        
+        // Fetch Skip Times
+        let title = movie?.title ?? ""
+        let epTitle = episodes[currentIndex].title
+        AniSkipManager.shared.resolveTimestamps(movieTitle: title, movieUrl: episodeUrl, episodeText: epTitle) { [weak self] result in
+            DispatchQueue.main.async {
+                self?.aniSkipResult = result
+                self?.lastIntroSkip = -1
+                self?.lastOutroSkip = -1
+            }
+        }
+        
         Extractor.resolveStream(episodeUrl: episodeUrl, isCancelled: { [weak self] in
             guard let self = self else { return true }
             return generation != self.resolveGeneration || episodeUrl != self.episodeUrl
@@ -209,6 +249,256 @@ class PlayerController: UIViewController {
                 self.statusLabel.text = "Đang khởi động player..."
                 self.attachPlayer(for: stream)
             }
+        }
+    }
+    
+    private func setupSkipUI() {
+        skipButton.translatesAutoresizingMaskIntoConstraints = false
+        skipButton.backgroundColor = AppTheme.cardBackgroundLighter.withAlphaComponent(0.90)
+        skipButton.setTitleColor(.white, for: .normal)
+        skipButton.titleLabel?.font = AppTheme.Fonts.subhead(size: 14)
+        skipButton.layer.cornerRadius = 22
+        skipButton.layer.borderWidth = 1.5
+        skipButton.layer.borderColor = AppTheme.primaryAccent.cgColor
+        skipButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
+        skipButton.clipsToBounds = false
+        skipButton.isHidden = true
+        skipButton.addTarget(self, action: #selector(performSkip), for: .touchUpInside)
+        AppTheme.applyGlow(to: skipButton, color: AppTheme.primaryAccent, radius: 14, opacity: 0.65)
+        view.addSubview(skipButton)
+
+        skipToastLabel.translatesAutoresizingMaskIntoConstraints = false
+        skipToastLabel.backgroundColor = AppTheme.cardBackground.withAlphaComponent(0.92)
+        skipToastLabel.textColor = AppTheme.textPrimary
+        skipToastLabel.font = AppTheme.Fonts.subhead(size: 13)
+        skipToastLabel.layer.cornerRadius = 20
+        skipToastLabel.layer.borderWidth = 1
+        skipToastLabel.layer.borderColor = AppTheme.borderHighlight.cgColor
+        skipToastLabel.clipsToBounds = true
+        skipToastLabel.textAlignment = .center
+        skipToastLabel.isHidden = true
+        AppTheme.applyGlow(to: skipToastLabel, color: UIColor.black, radius: 12, opacity: 0.4)
+        view.addSubview(skipToastLabel)
+
+        NSLayoutConstraint.activate([
+            skipButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -60),
+            skipButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            skipButton.heightAnchor.constraint(equalToConstant: 44),
+            skipButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 150),
+            
+            skipToastLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            skipToastLabel.bottomAnchor.constraint(equalTo: view.centerYAnchor, constant: 120),
+            skipToastLabel.heightAnchor.constraint(equalToConstant: 40),
+            skipToastLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 240)
+        ])
+    }
+
+    private func setupGestureHudUI() {
+        // Container Glassmorphism cho HUD Volume & Brightness
+        gestureHudContainer.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudContainer.backgroundColor = AppTheme.cardBackground.withAlphaComponent(0.88)
+        gestureHudContainer.layer.cornerRadius = 20
+        gestureHudContainer.layer.borderWidth = 1
+        gestureHudContainer.layer.borderColor = AppTheme.borderGlass.cgColor
+        gestureHudContainer.clipsToBounds = true
+        gestureHudContainer.alpha = 0.0
+        AppTheme.applyGlow(to: gestureHudContainer, color: .black, radius: 16, opacity: 0.5)
+        view.addSubview(gestureHudContainer)
+
+        gestureHudIcon.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudIcon.tintColor = AppTheme.vipGold
+        gestureHudIcon.contentMode = .scaleAspectFit
+        gestureHudContainer.addSubview(gestureHudIcon)
+
+        gestureHudLabel.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudLabel.font = AppTheme.Fonts.subhead(size: 14)
+        gestureHudLabel.textColor = AppTheme.textPrimary
+        gestureHudContainer.addSubview(gestureHudLabel)
+
+        gestureHudProgress.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudProgress.progressTintColor = AppTheme.primaryAccent
+        gestureHudProgress.trackTintColor = UIColor.white.withAlphaComponent(0.15)
+        gestureHudProgress.layer.cornerRadius = 2
+        gestureHudProgress.clipsToBounds = true
+        gestureHudContainer.addSubview(gestureHudProgress)
+
+        // Ripple indicator cho Double-tap seek (+10s / -10s)
+        seekRippleIndicator.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleIndicator.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        seekRippleIndicator.layer.cornerRadius = 35
+        seekRippleIndicator.layer.borderWidth = 1
+        seekRippleIndicator.layer.borderColor = AppTheme.borderHighlight.cgColor
+        seekRippleIndicator.clipsToBounds = true
+        seekRippleIndicator.alpha = 0.0
+        view.addSubview(seekRippleIndicator)
+
+        seekRippleIcon.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleIcon.tintColor = .white
+        seekRippleIcon.contentMode = .scaleAspectFit
+        seekRippleIndicator.addSubview(seekRippleIcon)
+
+        seekRippleLabel.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleLabel.font = AppTheme.Fonts.badge(size: 12)
+        seekRippleLabel.textColor = .white
+        seekRippleLabel.textAlignment = .center
+        seekRippleIndicator.addSubview(seekRippleLabel)
+
+        NSLayoutConstraint.activate([
+            gestureHudContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            gestureHudContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 28),
+            gestureHudContainer.widthAnchor.constraint(equalToConstant: 220),
+            gestureHudContainer.heightAnchor.constraint(equalToConstant: 46),
+
+            gestureHudIcon.leadingAnchor.constraint(equalTo: gestureHudContainer.leadingAnchor, constant: 14),
+            gestureHudIcon.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudIcon.widthAnchor.constraint(equalToConstant: 22),
+            gestureHudIcon.heightAnchor.constraint(equalToConstant: 22),
+
+            gestureHudLabel.leadingAnchor.constraint(equalTo: gestureHudIcon.trailingAnchor, constant: 10),
+            gestureHudLabel.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudLabel.widthAnchor.constraint(equalToConstant: 44),
+
+            gestureHudProgress.leadingAnchor.constraint(equalTo: gestureHudLabel.trailingAnchor, constant: 8),
+            gestureHudProgress.trailingAnchor.constraint(equalTo: gestureHudContainer.trailingAnchor, constant: -14),
+            gestureHudProgress.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudProgress.heightAnchor.constraint(equalToConstant: 5),
+
+            seekRippleIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            seekRippleIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            seekRippleIndicator.widthAnchor.constraint(equalToConstant: 100),
+            seekRippleIndicator.heightAnchor.constraint(equalToConstant: 70),
+
+            seekRippleIcon.centerXAnchor.constraint(equalTo: seekRippleIndicator.centerXAnchor),
+            seekRippleIcon.topAnchor.constraint(equalTo: seekRippleIndicator.topAnchor, constant: 12),
+            seekRippleIcon.widthAnchor.constraint(equalToConstant: 24),
+            seekRippleIcon.heightAnchor.constraint(equalToConstant: 24),
+
+            seekRippleLabel.centerXAnchor.constraint(equalTo: seekRippleIndicator.centerXAnchor),
+            seekRippleLabel.topAnchor.constraint(equalTo: seekRippleIcon.bottomAnchor, constant: 4)
+        ])
+    }
+
+    private func showGestureHud(icon: String, percent: Float) {
+        gestureHudDismissWork?.cancel()
+        gestureHudIcon.image = UIImage(systemName: icon)
+        let displayPercent = Int(round(percent * 100))
+        gestureHudLabel.text = "\(displayPercent)%"
+        gestureHudProgress.setProgress(percent, animated: false)
+
+        view.bringSubviewToFront(gestureHudContainer)
+        UIView.animate(withDuration: 0.15) {
+            self.gestureHudContainer.alpha = 1.0
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.3) {
+                self?.gestureHudContainer.alpha = 0.0
+            }
+        }
+        gestureHudDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    private func showSeekRipple(isForward: Bool) {
+        seekRippleIcon.image = UIImage(systemName: isForward ? "goforward.10" : "gobackward.10")
+        seekRippleLabel.text = isForward ? "+10s" : "-10s"
+
+        view.bringSubviewToFront(seekRippleIndicator)
+        seekRippleIndicator.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
+        UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.6, initialSpringVelocity: 0.8, options: .beginFromCurrentState) {
+            self.seekRippleIndicator.alpha = 1.0
+            self.seekRippleIndicator.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.25, delay: 0.4, options: .curveEaseOut) {
+                self.seekRippleIndicator.alpha = 0.0
+            }
+        }
+    }
+
+    private func checkSkip(currentTime: Double) {
+        guard let duration = currentPlayerItem?.duration.seconds, duration.isFinite else { return }
+        
+        var showType: String?
+        var targetTime: Double?
+        
+        // Check Intro
+        if let intro = aniSkipResult?.intro {
+            let s = max(0, intro.start)
+            let e = intro.end
+            if currentTime >= s - 0.2 && currentTime < e - 0.3 {
+                if isAutoSkipIntro {
+                    if abs(currentTime - lastIntroSkip) > 1.5 {
+                        lastIntroSkip = currentTime
+                        currentPlayer?.seek(to: CMTime(seconds: e, preferredTimescale: 600))
+                        showSkipToast(message: "Đã tự động bỏ qua Intro")
+                        return
+                    }
+                } else {
+                    showType = "Bỏ qua Intro ⏵"
+                    targetTime = e
+                }
+            }
+        }
+        
+        // Check Outro
+        if let outro = aniSkipResult?.outro {
+            var s = outro.start
+            var e = (outro.end > s && outro.end.isFinite) ? outro.end : duration
+            
+            if aniSkipResult?.isEstimated == true, let epLen = outro.episodeLength, duration > 0 {
+                let offsetStart = epLen - outro.start
+                s = duration - offsetStart
+                if outro.end.isFinite {
+                    let offsetEnd = epLen - outro.end
+                    e = duration - offsetEnd
+                } else {
+                    e = duration
+                }
+            }
+            
+            if currentTime >= s && currentTime < e - 0.3 {
+                if isAutoSkipOutro {
+                    if abs(currentTime - lastOutroSkip) > 1.5 {
+                        lastOutroSkip = currentTime
+                        currentPlayer?.seek(to: CMTime(seconds: e, preferredTimescale: 600))
+                        showSkipToast(message: "Đã tự động bỏ qua Outro")
+                        return
+                    }
+                } else {
+                    showType = "Bỏ qua Outro ⏵"
+                    targetTime = e
+                }
+            }
+        }
+        
+        if let type = showType, let target = targetTime {
+            skipButton.setTitle(type, for: .normal)
+            skipButton.isHidden = false
+            currentSkipTarget = target
+            view.bringSubviewToFront(skipButton)
+        } else {
+            skipButton.isHidden = true
+            currentSkipTarget = nil
+        }
+    }
+
+    @objc private func performSkip() {
+        guard let target = currentSkipTarget else { return }
+        currentPlayer?.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        skipButton.isHidden = true
+        currentSkipTarget = nil
+    }
+
+    private func showSkipToast(message: String) {
+        skipToastLabel.text = "  \(message)  "
+        skipToastLabel.isHidden = false
+        view.bringSubviewToFront(skipToastLabel)
+        skipToastLabel.alpha = 1
+        
+        UIView.animate(withDuration: 0.3, delay: 2.0, options: .curveEaseOut, animations: {
+            self.skipToastLabel.alpha = 0
+        }) { _ in
+            self.skipToastLabel.isHidden = true
         }
     }
 
@@ -407,13 +697,16 @@ class PlayerController: UIViewController {
             resumeStatusObservation = token
         }
 
-        // Lưu vị trí mỗi 5s.
-        let interval = CMTime(seconds: 5, preferredTimescale: 600)
+        // Lưu vị trí mỗi 5s và kiểm tra Skip mỗi 1s.
+        let interval = CMTime(seconds: 1, preferredTimescale: 600)
         periodicTimeToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self, let url = self.episodeUrl else { return }
             let secs = CMTimeGetSeconds(time)
             if secs.isFinite {
-                self.persistCurrentPosition(for: url, clearWhenNearStart: false)
+                if Int(secs) % 5 == 0 {
+                    self.persistCurrentPosition(for: url, clearWhenNearStart: false)
+                }
+                self.checkSkip(currentTime: secs)
             }
         }
 
@@ -829,43 +1122,6 @@ final class EpisodePickerCell: UICollectionViewCell {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func collectionView(_ cv: UICollectionView, numberOfItemsInSection s: Int) -> Int { episodes.count }
-
-    func collectionView(_ cv: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = cv.dequeueReusableCell(withReuseIdentifier: "Cell", for: indexPath) as! EpisodePickerCell
-        let isCurrent = indexPath.row == currentIndex
-        let ep = episodes[indexPath.row]
-        cell.configure(number: indexPath.row + 1, isCurrent: isCurrent, title: ep.title)
-        return cell
-    }
-
-    func collectionView(_ cv: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        onSelect?(indexPath.row)
-    }
-}
-
-final class EpisodePickerCell: UICollectionViewCell {
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        contentView.layer.cornerRadius = 10
-        contentView.clipsToBounds = true
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textAlignment = .center
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.7
-        label.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -4),
-            label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
     func configure(number: Int, isCurrent: Bool, title: String) {
         accessibilityLabel = title.isEmpty ? "Tập \(number)" : title
         accessibilityTraits = isCurrent ? [.button, .selected] : [.button]
@@ -955,14 +1211,26 @@ extension PlayerController: PlayerGestureHandlerDelegate {
         let delta: Double = isForward ? 10.0 : -10.0
         let newTime = max(0, currentSeconds + delta)
         player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
+        showSeekRipple(isForward: isForward)
         Logger.shared.log("[PlayerController] Gesture DoubleTapSeek: \(isForward ? "+10s" : "-10s") -> \(newTime)s")
     }
 
     func didChangeBrightness(level: CGFloat) {
+        showGestureHud(icon: "sun.max.fill", percent: Float(level))
         Logger.shared.log("[PlayerController] Gesture Brightness: \(Int(level * 100))%")
     }
 
-    func didChangeVolume(level: Float) {
-        Logger.shared.log("[PlayerController] Gesture Volume delta: \(level)")
+    func didChangeVolume(delta: Float) {
+        // Cập nhật âm lượng cục bộ của player
+        guard let player = currentPlayer else { return }
+        let currentVol = player.volume
+        let newVol = max(0.0, min(1.0, currentVol + delta))
+        player.volume = newVol
+        showGestureHud(icon: newVol > 0 ? "speaker.wave.3.fill" : "speaker.slash.fill", percent: newVol)
+        Logger.shared.log("[PlayerController] Gesture Volume: \(Int(newVol * 100))%")
+    }
+
+    func didEndGesture() {
+        // Gesture kết thúc
     }
 }

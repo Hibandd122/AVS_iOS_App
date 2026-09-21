@@ -5,12 +5,23 @@ import WebKit
 class NetworkManager: NSObject, WKNavigationDelegate {
     static let shared = NetworkManager()
     
-    private static let defaultDomain = "https://animevietsub.meme"
+    public static let primaryRedirectURL = "https://bit.ly/animevietsubtv"
+    private static let defaultDomain = "https://animevietsub.li"
+    private static let domainProbeDateKey = "AVS_LastDomainProbe"
+    private static let domainProbeSuccessKey = "AVS_LastDomainProbeSucceeded"
+
+    private var domainProbeInFlight = false
+    private var domainProbeCompletions: [(String) -> Void] = []
 
     var resolvedDomain: String {
         get {
             let stored = UserDefaults.standard.string(forKey: "AVS_ResolvedDomain")
-            return stored == "https://animevietsub.pl" ? Self.defaultDomain : (stored ?? Self.defaultDomain)
+            if let stored = stored,
+               !stored.contains("animevietsub.pl"),
+               !stored.contains("animevietsub.meme") {
+                return stored
+            }
+            return Self.defaultDomain
         }
         set {
             let candidate = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -31,13 +42,102 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             }
             if UserDefaults.standard.string(forKey: "AVS_ResolvedDomain") != cleaned {
                 UserDefaults.standard.set(cleaned, forKey: "AVS_ResolvedDomain")
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.domainProbeDateKey)
+                UserDefaults.standard.set(true, forKey: Self.domainProbeSuccessKey)
                 DiskCache.shared.removeAll()
                 Logger.shared.log("Đã cập nhật domain mới: \(cleaned)")
             }
         }
     }
     
-    /// Ép URL về đúng resolvedDomain hiện tại, dù link gốc chứa domain cũ.
+    /// Tự động cập nhật domain chuẩn từ link chuyển hướng chính thức (bit.ly/animevietsubtv)
+    /// mà không cần hardcode danh sách domainCandidates.
+    func autoDetectDomain(force: Bool = false, completion: @escaping (String) -> Void) {
+        let start = {
+            let now = Date().timeIntervalSince1970
+            let lastProbe = UserDefaults.standard.double(forKey: Self.domainProbeDateKey)
+            let lastProbeSucceeded = UserDefaults.standard.bool(forKey: Self.domainProbeSuccessKey)
+            let validCacheWindow: TimeInterval = lastProbeSucceeded ? 6 * 60 * 60 : 10 * 60
+            if !force, lastProbe > 0, now - lastProbe < validCacheWindow {
+                completion(self.resolvedDomain)
+                return
+            }
+
+            self.domainProbeCompletions.append(completion)
+            guard !self.domainProbeInFlight else { return }
+            self.domainProbeInFlight = true
+            UserDefaults.standard.set(now, forKey: Self.domainProbeDateKey)
+
+            self.resolveDomainFromShortlink(Self.primaryRedirectURL) { [weak self] detected in
+                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    if let detected = detected, detected != self.resolvedDomain {
+                        self.resolvedDomain = detected
+                        Logger.shared.log("[Domain] Tự động cập nhật domain chuẩn từ bit.ly: \(detected)")
+                    }
+                    UserDefaults.standard.set(detected != nil, forKey: Self.domainProbeSuccessKey)
+                    let result = self.resolvedDomain
+                    let completions = self.domainProbeCompletions
+                    self.domainProbeCompletions.removeAll()
+                    self.domainProbeInFlight = false
+                    completions.forEach { $0(result) }
+                }
+            }
+        }
+        if Thread.isMainThread { start() } else { DispatchQueue.main.async(execute: start) }
+    }
+
+    private func resolveDomainFromShortlink(_ urlString: String, completion: @escaping (String?) -> Void) {
+        guard let url = URL(string: urlString) else {
+            completion(nil)
+            return
+        }
+
+        class RedirectTracker: NSObject, URLSessionTaskDelegate {
+            var capturedDomain: String?
+
+            func urlSession(_ session: URLSession,
+                            task: URLSessionTask,
+                            willPerformHTTPRedirection response: HTTPURLResponse,
+                            newRequest request: URLRequest,
+                            completionHandler: @escaping (URLRequest?) -> Void) {
+                if let reqURL = request.url,
+                   let host = reqURL.host?.lowercased(),
+                   host.contains("animevietsub"),
+                   let scheme = reqURL.scheme {
+                    self.capturedDomain = "\(scheme)://\(host)"
+                }
+                completionHandler(request)
+            }
+        }
+
+        let tracker = RedirectTracker()
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 8
+        config.timeoutIntervalForResource = 10
+        let session = URLSession(configuration: config, delegate: tracker, delegateQueue: nil)
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                         forHTTPHeaderField: "User-Agent")
+
+        session.dataTask(with: request) { _, response, _ in
+            if let captured = tracker.capturedDomain {
+                completion(captured)
+                return
+            }
+            if let http = response as? HTTPURLResponse,
+               let respURL = http.url,
+               let host = respURL.host?.lowercased(),
+               host.contains("animevietsub"),
+               let scheme = respURL.scheme {
+                completion("\(scheme)://\(host)")
+                return
+            }
+            completion(nil)
+        }.resume()
+    }
+
     func normalizeURL(_ urlString: String) -> String {
         var raw = urlString.replacingOccurrences(of: "&amp;", with: "&")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -79,7 +179,8 @@ class NetworkManager: NSObject, WKNavigationDelegate {
     
     override init() {
         super.init()
-        if UserDefaults.standard.string(forKey: "AVS_ResolvedDomain") == "https://animevietsub.pl" {
+        if let stored = UserDefaults.standard.string(forKey: "AVS_ResolvedDomain"),
+           stored.contains("animevietsub.pl") || stored.contains("animevietsub.meme") {
             UserDefaults.standard.set(Self.defaultDomain, forKey: "AVS_ResolvedDomain")
             DiskCache.shared.removeAll()
         }
@@ -421,7 +522,8 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             || path.contains("xem-phim")
             || path.contains("-tap-")
             || path.contains("/tap-")
-        let retries = request.waitForIframe ? 16 : (isWatchLike ? 10 : 6)
+        // Với polling interval 0.25s: 32 retries = 8s, 24 retries = 6s, 16 retries = 4s
+        let retries = request.waitForIframe ? 32 : (isWatchLike ? 24 : 16)
         checkDOM(webView: webView,
                  loadId: loadId,
                  retries: retries,
@@ -488,6 +590,104 @@ class NetworkManager: NSObject, WKNavigationDelegate {
         if isLoadingHTML { finishHTMLRequest(loadId: currentLoadId, html: "") }
     }
 
+    // MARK: - WAF Warmup & Fast Path Session
+    private var isWarmingUpWAF = false
+    private var wafWarmupCompletions: [(Bool) -> Void] = []
+    private var lastWAFWarmupTime: TimeInterval = 0
+
+    /// Tự động thực hiện 2-step handshake vượt WAF của AnimeVietsub khi khởi động hoặc gặp 403.
+    /// Handshake lưu trực tiếp WAF cookies vào HTTPCookieStorage & WKWebsiteDataStore,
+    /// cho phép toàn bộ app tải HTML bằng URLSession native trong 100ms - 200ms.
+    func warmupWAFSessionIfNeeded(force: Bool = false, completion: @escaping (Bool) -> Void) {
+        let now = Date().timeIntervalSince1970
+        // Cookie WAF có hiệu lực ít nhất 2 giờ; nếu chưa quá 1 giờ và không ép buộc thì dùng tiếp
+        if !force, (now - lastWAFWarmupTime) < 3600, hasValidWAFCookies() {
+            completion(true)
+            return
+        }
+
+        wafWarmupCompletions.append(completion)
+        guard !isWarmingUpWAF else { return }
+        isWarmingUpWAF = true
+
+        guard let targetURL = URL(string: resolvedDomain + "/") else {
+            finishWAFWarmup(success: false)
+            return
+        }
+
+        var req1 = URLRequest(url: targetURL)
+        req1.timeoutInterval = 6
+        req1.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                      forHTTPHeaderField: "User-Agent")
+        req1.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                      forHTTPHeaderField: "Accept")
+        req1.setValue("vi-VN,vi;q=0.9,en;q=0.7", forHTTPHeaderField: "Accept-Language")
+
+        // Bước 1: Gửi request thăm dò nhận Set-Cookie WAF (thường trả 403 + cookies)
+        URLSession.shared.dataTask(with: req1) { [weak self] _, response, error in
+            guard let self = self else { return }
+            if let httpResp = response as? HTTPURLResponse,
+               let headerFields = httpResp.allHeaderFields as? [String: String],
+               let respURL = httpResp.url {
+                let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: respURL)
+                for c in cookies {
+                    HTTPCookieStorage.shared.setCookie(c)
+                }
+                self.syncCookiesToWebView(cookies)
+            }
+
+            // Bước 2: Thử nghiệm lại với cookies đã nhận
+            var req2 = URLRequest(url: targetURL)
+            req2.timeoutInterval = 6
+            req2.setValue(self.resolvedDomain + "/", forHTTPHeaderField: "Referer")
+            req2.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                          forHTTPHeaderField: "User-Agent")
+            req2.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                          forHTTPHeaderField: "Accept")
+
+            URLSession.shared.dataTask(with: req2) { [weak self] data, response2, error2 in
+                guard let self = self else { return }
+                let status2 = (response2 as? HTTPURLResponse)?.statusCode ?? 0
+                let html2 = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                let isSuccess = (status2 == 200) && Self.isUsableListingHTML(html2, statusCode: status2)
+
+                if isSuccess {
+                    self.lastWAFWarmupTime = Date().timeIntervalSince1970
+                    Logger.shared.log("[WAF] Handshake thành công vượt WAF (HTTP 200, \(html2.count) bytes)")
+                } else {
+                    Logger.shared.log("[WAF] Handshake bước 2 trả về HTTP \(status2), length: \(html2.count)")
+                }
+                self.finishWAFWarmup(success: isSuccess)
+            }.resume()
+        }.resume()
+    }
+
+    private func hasValidWAFCookies() -> Bool {
+        guard let url = URL(string: resolvedDomain) else { return false }
+        let cookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        return cookies.contains { $0.name.contains("session") || $0.name.count == 32 }
+    }
+
+    private func finishWAFWarmup(success: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isWarmingUpWAF = false
+            let callbacks = self.wafWarmupCompletions
+            self.wafWarmupCompletions.removeAll()
+            callbacks.forEach { $0(success) }
+        }
+    }
+
+    private func syncCookiesToWebView(_ cookies: [HTTPCookie]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let cookieStore = self.webView.configuration.websiteDataStore.httpCookieStore
+            for c in cookies {
+                cookieStore.setCookie(c, completionHandler: nil)
+            }
+        }
+    }
+
     private func syncCookiesToURLSession() {
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
             for c in cookies {
@@ -497,7 +697,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
     }
 
     static func isUsableListingHTML(_ html: String, statusCode: Int) -> Bool {
-        guard statusCode == 200 else { return false }
+        guard statusCode == 200 || statusCode == 301 || statusCode == 302 else { return false }
         let lower = html.lowercased()
         let isChallenge = lower.contains("cf-chl-")
             || lower.contains("just a moment")
@@ -505,15 +705,20 @@ class NetworkManager: NSObject, WKNavigationDelegate {
         let hasListingContent = lower.contains("/phim/")
             || lower.contains("tpost")
             || lower.contains("ml-item")
+            || lower.contains("animevietsub")
+            || lower.contains("halim-")
+            || lower.contains("player_data")
+            || lower.contains("movieinfo")
+            || lower.contains("mvtbcn")
         return !isChallenge && hasListingContent
     }
 
-    /// Fast path for list pages. Reuses WKWebView cookies but avoids the DOM polling
-    /// cost when Cloudflare already trusts the current session. A challenge/403 is
-    /// reported as nil so callers can transparently fall back to `fetchHTML`.
-    private func fetchDirectListingHTML(url: URL, completion: @escaping (String?) -> Void) {
+    /// Fast path for list/info/episodes pages. Reuses cookies from HTTPCookieStorage & WKWebView.
+    /// Tải HTML trực tiếp qua native URLSession chỉ mất 50-200ms, không bị nghẽn queue WKWebView.
+    func fetchDirectListingHTML(url: URL, completion: @escaping (String?) -> Void) {
         let startedAt = Date()
-        webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+
+        let performRequest = { (cookies: [HTTPCookie]) in
             let host = url.host?.lowercased() ?? ""
             let matchingCookies = cookies.filter { cookie in
                 let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
@@ -524,7 +729,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             }
 
             var request = URLRequest(url: url)
-            request.timeoutInterval = 4
+            request.timeoutInterval = 6
             request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                              forHTTPHeaderField: "Accept")
             request.setValue("vi-VN,vi;q=0.9,en;q=0.7", forHTTPHeaderField: "Accept-Language")
@@ -540,19 +745,40 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 request.setValue(value, forHTTPHeaderField: name)
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                guard let self = self else { completion(nil); return }
                 let html = data.flatMap { String(data: $0, encoding: .utf8) }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 let accepted = error == nil
                     && html.map { Self.isUsableListingHTML($0, statusCode: status) } == true
                 let elapsed = Int(Date().timeIntervalSince(startedAt) * 1_000)
+
+                // Cập nhật cookies mới nếu server set
+                if let httpResp = response as? HTTPURLResponse,
+                   let headerFields = httpResp.allHeaderFields as? [String: String],
+                   let respURL = httpResp.url {
+                    let newCookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: respURL)
+                    for nc in newCookies { HTTPCookieStorage.shared.setCookie(nc) }
+                    if !newCookies.isEmpty { self.syncCookiesToWebView(newCookies) }
+                }
+
                 Logger.shared.log("[DirectHTML] \(url.path.isEmpty ? "/" : url.path) HTTP \(status), accepted=\(accepted), \(elapsed)ms")
                 DispatchQueue.main.async { completion(accepted ? html : nil) }
             }.resume()
         }
+
+        // Đọc cookies kết hợp từ HTTPCookieStorage và WKWebView DataStore
+        let storageCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        if !storageCookies.isEmpty {
+            performRequest(storageCookies)
+        } else {
+            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                performRequest(cookies)
+            }
+        }
     }
 
-    private func fetchListingHTML(url: String, completion: @escaping (String) -> Void) {
+    func fetchListingHTML(url: String, completion: @escaping (String) -> Void) {
         let execute = { [weak self] in
             guard let self = self, let target = URL(string: url) else { completion(""); return }
             self.fetchDirectListingHTML(url: target) { [weak self] directHTML in
@@ -560,7 +786,20 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 if let directHTML = directHTML {
                     completion(directHTML)
                 } else {
-                    self.fetchHTML(url: url, completion: completion)
+                    // Nếu direct bị từ chối, kích hoạt Warmup rồi thử lại 1 lần trước khi fallback WKWebView
+                    self.warmupWAFSessionIfNeeded(force: true) { warmedUp in
+                        if warmedUp {
+                            self.fetchDirectListingHTML(url: target) { retriedHTML in
+                                if let retriedHTML = retriedHTML {
+                                    completion(retriedHTML)
+                                } else {
+                                    self.fetchHTML(url: url, completion: completion)
+                                }
+                            }
+                        } else {
+                            self.fetchHTML(url: url, completion: completion)
+                        }
+                    }
                 }
             }
         }
@@ -674,14 +913,89 @@ class NetworkManager: NSObject, WKNavigationDelegate {
         return URL(string: decoded, relativeTo: base)?.absoluteURL.absoluteString ?? decoded
     }
 
+    /// Returns true only when an episode link belongs to the movie currently
+    /// being parsed. Comment sections often contain links to episodes from
+    /// other titles; accepting every `/tap-*` anchor mixes those episodes into
+    /// the current series.
+    static func episodeLinkBelongsToMovie(_ episodeLink: String, movieURL: String) -> Bool {
+        func meaningfulTokens(_ value: String) -> Set<String> {
+            let path = URL(string: value)?.path.lowercased() ?? value.lowercased()
+            let ignored: Set<String> = ["phim", "xem", "xem-phim", "tap", "episode", "ep", "anime"]
+            return Set(path
+                .split { !$0.isLetter && !$0.isNumber }
+                .map(String.init)
+                .filter { $0.count >= 3 && !ignored.contains($0) && $0.range(of: "^\\d+$", options: .regularExpression) == nil })
+        }
+
+        let movieTokens = meaningfulTokens(movieURL)
+        let episodeTokens = meaningfulTokens(episodeLink)
+        guard !movieTokens.isEmpty, !episodeTokens.isEmpty else { return true }
+        return !movieTokens.isDisjoint(with: episodeTokens)
+    }
+
+    static func isEpisodeTitle(_ title: String, link: String) -> Bool {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty { return false }
+        
+        let lower = normalized.lowercased()
+        if lower.contains("đăng nhập") || lower.contains("login") || lower.contains("đăng ký") || lower.contains("trailer") {
+            return false
+        }
+        
+        let episodeMarker = "(?i)(?:tập|tap|episode|ep|ova|sp|special|part|phần|full)\\s*[-._:# ]*(\\d+(?:[.,]\\d+)?)?"
+        if normalized.range(of: episodeMarker, options: .regularExpression) != nil {
+            return true
+        }
+        // Some templates render only "05" in the label. Allow that narrow
+        // form only when the URL itself is an episode URL and the label is
+        // short; arbitrary comment text containing a number stays rejected.
+        let episodeLink = link.range(of: "(?i)(?:[-_/](?:tap|episode|ep)[-_\\d])", options: .regularExpression) != nil
+        return (episodeLink && normalized.range(of: "^\\d{1,4}$", options: .regularExpression) != nil) || normalized.range(of: "^(?:tập|ep)\\s*\\d{1,4}$", options: .caseInsensitive) != nil
+    }
+
     static func sortedEpisodes(_ episodes: [Episode]) -> [Episode] {
         func number(in episode: Episode) -> Double? {
-            let source = episode.title + " " + episode.link
-            let pattern = "(?i)(?:tập|tap|episode|ep)[\\s._/-]*(\\d+(?:[.,]\\d+)?)"
-            guard let value = firstMatch(in: source, pattern: pattern)?.replacingOccurrences(of: ",", with: ".") else {
-                return nil
+            let title = episode.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowerTitle = title.lowercased()
+            
+            if lowerTitle == "full" || lowerTitle == "tập full" || lowerTitle == "bản đẹp" {
+                return 0.0
             }
-            return Double(value)
+            if lowerTitle.hasPrefix("ova") || lowerTitle.hasPrefix("tập ova") {
+                let numPattern = "(\\d+)"
+                if let m = firstMatch(in: lowerTitle, pattern: numPattern), let v = Double(m) {
+                    return 10000.0 + v
+                }
+                return 10000.0
+            }
+            if lowerTitle.hasPrefix("sp") || lowerTitle.hasPrefix("special") || lowerTitle.contains("đặc biệt") {
+                let numPattern = "(\\d+)"
+                if let m = firstMatch(in: lowerTitle, pattern: numPattern), let v = Double(m) {
+                    return 20000.0 + v
+                }
+                return 20000.0
+            }
+            
+            let titlePattern = "(?i)(?:tập|tap|episode|ep)[\\s._/-]*(\\d+(?:[.,]\\d+)?)"
+            if let val = firstMatch(in: title, pattern: titlePattern)?.replacingOccurrences(of: ",", with: "."),
+               let d = Double(val) {
+                return d
+            }
+            if let d = Double(title) {
+                return d
+            }
+            
+            let linkPattern = "(?i)(?:[-_/](?:tap|episode|ep|e))[-_\\s]*(\\d+(?:[.,]\\d+)?)"
+            if let val = firstMatch(in: episode.link, pattern: linkPattern)?.replacingOccurrences(of: ",", with: "."),
+               let d = Double(val) {
+                return d
+            }
+            let genericNumPattern = "(?i)[-_/](\\d{1,4})(?:[-_/.]|$)"
+            if let val = firstMatch(in: episode.link, pattern: genericNumPattern),
+               let d = Double(val) {
+                return d
+            }
+            return nil
         }
 
         let numbered = episodes.enumerated().compactMap { index, episode -> (Int, Episode, Double)? in
@@ -786,7 +1100,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             return
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard loadId == self.currentLoadId, self.isLoadingHTML else { return }
             
             let jsCheck = """
@@ -862,6 +1176,14 @@ class NetworkManager: NSObject, WKNavigationDelegate {
     }
     
     func fetchHomeMovies(completion: @escaping ([Movie]) -> Void) {
+        autoDetectDomain { [weak self] _ in
+            guard let self = self else { completion([]); return }
+            self.fetchHomeMoviesUsingCurrentDomain(completion: completion, allowDomainRecovery: true)
+        }
+    }
+
+    private func fetchHomeMoviesUsingCurrentDomain(completion: @escaping ([Movie]) -> Void,
+                                                   allowDomainRecovery: Bool) {
         var deliveredMovies: [Movie]?
         if let cached: (value: [Movie], age: TimeInterval) = DiskCache.shared.getWithAge("home", as: [Movie].self),
            !cached.value.isEmpty {
@@ -885,6 +1207,14 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 completion(movies)
             }
         }) { movies in
+            if movies.isEmpty, allowDomainRecovery {
+                Logger.shared.log("[Domain] Trang chủ rỗng, thử dò lại domain")
+                self.autoDetectDomain(force: true) { [weak self] _ in
+                    self?.fetchHomeMoviesUsingCurrentDomain(completion: completion,
+                                                            allowDomainRecovery: false)
+                }
+                return
+            }
             if !movies.isEmpty, self.resolvedDomain == requestedDomain {
                 DiskCache.shared.set(movies, forKey: "home")
             }
@@ -1061,7 +1391,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
     // MARK: - Movie details (info page)
 
     /// Fetch trang info phim → parse description, year, rating, banner, genres.
-    /// Cache 24h vì info ít đổi.
+    /// Fast Path URLSession trực tiếp thay vì đè vào hàng đợi tuần tự WKWebView. Cache 24h.
     func fetchMovieDetails(movieUrl: String, completion: @escaping (MovieDetails?) -> Void) {
         let normalizedUrl = normalizeURL(movieUrl)
         let key = "details." + (normalizedUrl.data(using: .utf8)?.base64EncodedString() ?? normalizedUrl)
@@ -1069,7 +1399,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             completion(cached)
             return
         }
-        fetchHTML(url: normalizedUrl) { html in
+        fetchListingHTML(url: normalizedUrl) { html in
             let details = Self.parseDetails(from: html)
             if !details.description.isEmpty || !details.genres.isEmpty {
                 DiskCache.shared.set(details, forKey: key)
@@ -1171,45 +1501,12 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             completion(cached)
             return
         }
-        fetchHTML(url: normalizedUrl) { html in
-            var episodes: [Episode] = []
-            
-            let patterns = [
-                "(?i)<a[^>]*?href=[\"']([^\"']*?tap-[^\"']*?(?:\\.html)?)[\"'][^>]*>(.*?)</a>",
-                "(?i)<a[^>]*?href=[\"']([^\"']*?(?:/episode|/xem-phim|/tap)[^\"']*?(?:\\.html)?)[\"'][^>]*>(.*?)</a>"
-            ]
-            for pattern in patterns {
-                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
-                let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
-                for match in matches {
-                    guard let linkRange = Range(match.range(at: 1), in: html),
-                          let titleRange = Range(match.range(at: 2), in: html) else { continue }
-                    
-                    let link = String(html[linkRange])
-                    let title = HTMLUtilities.plainText(fromHTML: String(html[titleRange]))
-                    
-                    let lowerTitle = title.lowercased()
-                    let lowerLink = link.lowercased()
-                    if lowerTitle.contains("đăng nhập") || lowerTitle.contains("login") || lowerLink.contains("login") || lowerTitle.contains("đăng ký") {
-                        continue
-                    }
-                    
-                    let isEpisodeTitle = lowerTitle.contains("tập")
-                        || lowerTitle.contains("episode")
-                        || (title.rangeOfCharacter(from: .decimalDigits) != nil && title.count < 30)
-                    guard isEpisodeTitle else { continue }
-                    
-                    let fullLink = NetworkManager.shared.normalizeURL(link)
-                    if !episodes.contains(where: { $0.link == fullLink }) {
-                        episodes.append(Episode(title: title, link: fullLink))
-                    }
-                }
-                if !episodes.isEmpty { break }
-            }
+        fetchListingHTML(url: normalizedUrl) { html in
+            let parsed = Self.parseEpisodes(from: html, movieURL: normalizedUrl)
             
             var uniqueEps: [Episode] = []
             var seen = Set<String>()
-            for ep in episodes.reversed() {
+            for ep in parsed.reversed() {
                 if !seen.contains(ep.link) {
                     seen.insert(ep.link)
                     uniqueEps.insert(ep, at: 0)
@@ -1233,5 +1530,96 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 completion(uniqueEps)
             }
         }
+    }
+
+    static func parseEpisodes(from html: String, movieURL: String) -> [Episode] {
+        var episodes: [Episode] = []
+        
+        // 1. CONTAINER PRIORITY: tìm các container chứa danh sách tập chuyên biệt của server
+        let containerPatterns = [
+            "(?i)<(?:div|ul)[^>]*?(?:class=[\"'][^\"']*?(?:halim-list-eps|list-episode|server-item|episodes-list|list-server|server-eps)[^\"']*?[\"']|id=[\"'](?:halim-list-server|list-server|episodes-list)[\"'])[^>]*?>([\\s\\S]*?)</(?:div|ul)>",
+            "(?i)<div[^>]*?class=[\"'][^\"']*?les-content[^\"']*?[\"'][^>]*?>([\\s\\S]*?)</div>"
+        ]
+        
+        var containerMatches: [String] = []
+        for cp in containerPatterns {
+            if let regex = try? NSRegularExpression(pattern: cp) {
+                let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+                for match in matches {
+                    if let r = Range(match.range(at: 1), in: html) {
+                        containerMatches.append(String(html[r]))
+                    }
+                }
+            }
+        }
+        
+        let anchorPattern = "(?i)<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)</a>"
+        guard let anchorRegex = try? NSRegularExpression(pattern: anchorPattern) else { return [] }
+        
+        // Parse bên trong container trước nếu có
+        for containerHTML in containerMatches {
+            let matches = anchorRegex.matches(in: containerHTML, range: NSRange(containerHTML.startIndex..., in: containerHTML))
+            for match in matches {
+                guard let linkRange = Range(match.range(at: 1), in: containerHTML),
+                      let titleRange = Range(match.range(at: 2), in: containerHTML) else { continue }
+                
+                let link = String(containerHTML[linkRange])
+                let rawTitle = HTMLUtilities.plainText(fromHTML: String(containerHTML[titleRange]))
+                let title = normalizeEpisodeDisplayTitle(rawTitle)
+                
+                guard isEpisodeTitle(title, link: link) else { continue }
+                let fullLink = NetworkManager.shared.normalizeURL(link)
+                if !episodes.contains(where: { ContentIdentifier.make(from: $0.link) == ContentIdentifier.make(from: fullLink) }) {
+                    episodes.append(Episode(title: title, link: fullLink))
+                }
+            }
+        }
+        
+        if !episodes.isEmpty {
+            return episodes
+        }
+        
+        // 2. FALLBACK: Quét toàn bộ trang với bộ lọc ownership
+        let fallbackPatterns = [
+            "(?i)<a[^>]*?href=[\"']([^\"']*?tap-[^\"']*?(?:\\.html)?)[\"'][^>]*>(.*?)</a>",
+            "(?i)<a[^>]*?href=[\"']([^\"']*?(?:/episode|/xem-phim|/tap)[^\"']*?(?:\\.html)?)[\"'][^>]*>(.*?)</a>"
+        ]
+        for pattern in fallbackPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+            for match in matches {
+                guard let linkRange = Range(match.range(at: 1), in: html),
+                      let titleRange = Range(match.range(at: 2), in: html) else { continue }
+                
+                let link = String(html[linkRange])
+                let rawTitle = HTMLUtilities.plainText(fromHTML: String(html[titleRange]))
+                let title = normalizeEpisodeDisplayTitle(rawTitle)
+                
+                let lowerTitle = title.lowercased()
+                let lowerLink = link.lowercased()
+                if lowerTitle.contains("đăng nhập") || lowerTitle.contains("login") || lowerLink.contains("login") || lowerTitle.contains("đăng ký") {
+                    continue
+                }
+                
+                guard episodeLinkBelongsToMovie(link, movieURL: movieURL),
+                      isEpisodeTitle(title, link: link) else { continue }
+
+                let fullLink = NetworkManager.shared.normalizeURL(link)
+                if !episodes.contains(where: { ContentIdentifier.make(from: $0.link) == ContentIdentifier.make(from: fullLink) }) {
+                    episodes.append(Episode(title: title, link: fullLink))
+                }
+            }
+            if !episodes.isEmpty { break }
+        }
+        
+        return episodes
+    }
+    
+    private static func normalizeEpisodeDisplayTitle(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.range(of: "^\\d{1,4}$", options: .regularExpression) != nil {
+            return "Tập \(trimmed)"
+        }
+        return trimmed
     }
 }

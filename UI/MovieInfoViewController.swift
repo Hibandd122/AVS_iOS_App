@@ -16,13 +16,12 @@ class MovieInfoViewController: UIViewController {
     private let favButton = UIButton(type: .system)
     private let continueButton = UIButton(type: .system)
     private let loader = UIActivityIndicatorView(style: .medium)
+    private let descSkeleton = SkeletonView()
 
     private var episodes: [Episode] = []
     private var details: MovieDetails?
     private var resumeEpisodeIndex: Int?
     private var isDescriptionExpanded = false
-
-    private let bgView = BackgroundView()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -33,7 +32,7 @@ class MovieInfoViewController: UIViewController {
         }
         title = movie.title
 
-        setupBackground()
+        view.backgroundColor = AppTheme.backgroundDark
         setupNavBar()
         setupViews()
         bindMovie()
@@ -57,8 +56,31 @@ class MovieInfoViewController: UIViewController {
         favButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
         favButton.accessibilityLabel = "Yêu thích"
         favButton.addTarget(self, action: #selector(toggleFavorite), for: .touchUpInside)
-        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: favButton)
+
+        let shareButton = UIButton(type: .system)
+        shareButton.translatesAutoresizingMaskIntoConstraints = false
+        shareButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        shareButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        shareButton.setImage(UIImage(systemName: "square.and.arrow.up"), for: .normal)
+        shareButton.tintColor = AppTheme.textPrimary
+        shareButton.accessibilityLabel = "Chia sẻ"
+        shareButton.addTarget(self, action: #selector(shareMovie), for: .touchUpInside)
+
+        let favBarItem = UIBarButtonItem(customView: favButton)
+        let shareBarItem = UIBarButtonItem(customView: shareButton)
+        navigationItem.rightBarButtonItems = [favBarItem, shareBarItem]
         refreshFavButton()
+    }
+
+    @objc private func shareMovie() {
+        guard let movie = movie else { return }
+        let shareUrl = movie.link.hasPrefix("http") ? movie.link : "\(NetworkManager.shared.resolvedDomain)\(movie.link)"
+        let text = "Xem anime \(movie.title) trên AnimeVietsub:"
+        let activityVC = UIActivityViewController(activityItems: [text, shareUrl], applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.barButtonItem = navigationItem.rightBarButtonItems?.last
+        }
+        present(activityVC, animated: true)
     }
 
     private func refreshFavButton() {
@@ -83,19 +105,6 @@ class MovieInfoViewController: UIViewController {
         }
     }
 
-    private func setupBackground() {
-        bgView.setStyle(.default)
-        bgView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(bgView)
-        view.sendSubviewToBack(bgView)
-        NSLayoutConstraint.activate([
-            bgView.topAnchor.constraint(equalTo: view.topAnchor),
-            bgView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bgView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bgView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-    }
-
     private func setupViews() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsVerticalScrollIndicator = false
@@ -113,7 +122,7 @@ class MovieInfoViewController: UIViewController {
         bannerImage.backgroundColor = .tertiarySystemFill
         bannerImage.translatesAutoresizingMaskIntoConstraints = false
         let bannerWrap = UIView()
-        bannerWrap.backgroundColor = .bgTertiary
+        bannerWrap.backgroundColor = AppTheme.cardBackground
         bannerWrap.layer.cornerRadius = 22
         bannerWrap.clipsToBounds = true
         bannerWrap.addSubview(bannerImage)
@@ -126,28 +135,28 @@ class MovieInfoViewController: UIViewController {
             bannerHeightConstraint
         ])
 
-        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        titleLabel.font = AppTheme.Fonts.heroTitle(size: 26)
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
-        metaLabel.font = .preferredFont(forTextStyle: .subheadline)
+        metaLabel.font = AppTheme.Fonts.subhead(size: 14)
         metaLabel.adjustsFontForContentSizeCategory = true
-        metaLabel.textColor = .secondaryLabel
+        metaLabel.textColor = AppTheme.textSecondary
         metaLabel.numberOfLines = 1
-        metaLabel.backgroundColor = UIColor.secondarySystemFill.withAlphaComponent(0.7)
+        metaLabel.backgroundColor = AppTheme.surfaceGlass
         metaLabel.layer.cornerRadius = 10
         metaLabel.clipsToBounds = true
 
-        descLabel.font = .preferredFont(forTextStyle: .body)
+        descLabel.font = AppTheme.Fonts.body(size: 15)
         descLabel.adjustsFontForContentSizeCategory = true
-        descLabel.textColor = .textPrimary
+        descLabel.textColor = AppTheme.textPrimary
         descLabel.numberOfLines = 4
-        descLabel.backgroundColor = UIColor.secondarySystemFill.withAlphaComponent(0.7)
+        descLabel.backgroundColor = AppTheme.surfaceGlass
         descLabel.layer.cornerRadius = 16
         descLabel.clipsToBounds = true
 
-        expandDescriptionButton.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
+        expandDescriptionButton.titleLabel?.font = AppTheme.Fonts.subhead(size: 14)
         expandDescriptionButton.titleLabel?.adjustsFontForContentSizeCategory = true
-        expandDescriptionButton.tintColor = .accent
+        expandDescriptionButton.tintColor = AppTheme.secondaryAccent
         expandDescriptionButton.contentHorizontalAlignment = .leading
         expandDescriptionButton.setTitle("Xem thêm", for: .normal)
         expandDescriptionButton.setImage(UIImage(systemName: "chevron.down"), for: .normal)
@@ -199,7 +208,14 @@ class MovieInfoViewController: UIViewController {
         styleAccentButton(allEpisodesButton, accent: false)
         allEpisodesButton.addTarget(self, action: #selector(showAllEpisodes), for: .touchUpInside)
 
-        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, allEpisodesButton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
+        descSkeleton.translatesAutoresizingMaskIntoConstraints = false
+        descSkeleton.layer.cornerRadius = 16
+        descSkeleton.clipsToBounds = true
+        descSkeleton.startShimmer()
+
+        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, allEpisodesButton, descSkeleton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
+
+        descLabel.isHidden = true
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -211,20 +227,26 @@ class MovieInfoViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor, constant: -16),
             stack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: -24),
             stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -32),
-            genreScroll.heightAnchor.constraint(equalToConstant: 34)
+            genreScroll.heightAnchor.constraint(equalToConstant: 34),
+            descSkeleton.heightAnchor.constraint(equalToConstant: 78)
         ])
     }
 
     private func styleAccentButton(_ btn: UIButton, accent: Bool = true) {
-        btn.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
-        btn.backgroundColor = accent ? .systemRed : .secondarySystemFill
-        btn.setTitleColor(accent ? .white : .label, for: .normal)
-        btn.tintColor = accent ? .white : .accent
+        btn.titleLabel?.font = AppTheme.Fonts.subhead(size: 15)
+        btn.backgroundColor = accent ? AppTheme.primaryAccent : AppTheme.cardBackgroundLighter
+        btn.setTitleColor(accent ? .white : AppTheme.textPrimary, for: .normal)
+        btn.tintColor = accent ? .white : AppTheme.secondaryAccent
         btn.semanticContentAttribute = .forceLeftToRight
-        btn.layer.cornerRadius = 12
+        btn.layer.cornerRadius = 16
+        btn.layer.borderWidth = accent ? 0 : 1
+        btn.layer.borderColor = AppTheme.borderGlass.cgColor
         btn.clipsToBounds = true
         btn.contentEdgeInsets = UIEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         btn.imageView?.contentMode = .scaleAspectFit
+        if accent {
+            AppTheme.applyGlow(to: btn, color: AppTheme.primaryAccent, radius: 10, opacity: 0.45)
+        }
     }
 
     private func bindMovie() {
@@ -240,19 +262,27 @@ class MovieInfoViewController: UIViewController {
         NetworkManager.shared.fetchMovieDetails(movieUrl: movie.link) { [weak self] details in
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                self.details = details
-                self.applyDetails()
+                guard let d = details else {
+                    self.descLabel.text = "(Không thể tải thông tin chi tiết phim)"
+                    return
+                }
+                self.populateDetails(d)
             }
         }
     }
 
-    private func applyDetails() {
-        guard let d = details else { return }
+    private func populateDetails(_ d: MovieDetails) {
         var metaParts: [String] = []
-        if !d.year.isEmpty { metaParts.append(d.year) }
         if !d.rating.isEmpty { metaParts.append("⭐ \(d.rating)") }
-        if !movie.episodeStatus.isEmpty { metaParts.append(movie.episodeStatus) }
-        metaLabel.text = metaParts.joined(separator: "  •  ")
+        if !d.year.isEmpty { metaParts.append("📅 \(d.year)") }
+        if !movie.episodeStatus.isEmpty {
+            metaParts.append(movie.episodeStatus)
+        }
+        metaLabel.text = metaParts.joined(separator: "   •   ")
+
+        descSkeleton.stopShimmer()
+        descSkeleton.isHidden = true
+        descLabel.isHidden = false
 
         descLabel.text = d.description.isEmpty ? "(Chưa có mô tả)" : d.description
         isDescriptionExpanded = false
@@ -265,15 +295,17 @@ class MovieInfoViewController: UIViewController {
             ImageLoader.shared.load(url, into: bannerImage)
         }
 
-        // Genre chips
+        // Genre chips VIP phong cách Capsule kính mờ
         genreStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for g in d.genres.prefix(8) {
             let chip = UILabel()
-            chip.text = "  \(g)  "
-            chip.font = .systemFont(ofSize: 12, weight: .semibold)
-            chip.textColor = .accent
-            chip.backgroundColor = UIColor.accent.withAlphaComponent(0.12)
-            chip.layer.cornerRadius = 12
+            chip.text = "   \(g)   "
+            chip.font = AppTheme.Fonts.caption(size: 12)
+            chip.textColor = AppTheme.textPrimary
+            chip.backgroundColor = AppTheme.cardBackgroundLighter
+            chip.layer.cornerRadius = 14
+            chip.layer.borderWidth = 1
+            chip.layer.borderColor = AppTheme.borderGlass.cgColor
             chip.clipsToBounds = true
             genreStack.addArrangedSubview(chip)
         }
