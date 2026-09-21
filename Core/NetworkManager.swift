@@ -522,7 +522,8 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             || path.contains("xem-phim")
             || path.contains("-tap-")
             || path.contains("/tap-")
-        let retries = request.waitForIframe ? 16 : (isWatchLike ? 10 : 6)
+        // Với polling interval 0.25s: 32 retries = 8s, 24 retries = 6s, 16 retries = 4s
+        let retries = request.waitForIframe ? 32 : (isWatchLike ? 24 : 16)
         checkDOM(webView: webView,
                  loadId: loadId,
                  retries: retries,
@@ -589,6 +590,104 @@ class NetworkManager: NSObject, WKNavigationDelegate {
         if isLoadingHTML { finishHTMLRequest(loadId: currentLoadId, html: "") }
     }
 
+    // MARK: - WAF Warmup & Fast Path Session
+    private var isWarmingUpWAF = false
+    private var wafWarmupCompletions: [(Bool) -> Void] = []
+    private var lastWAFWarmupTime: TimeInterval = 0
+
+    /// Tự động thực hiện 2-step handshake vượt WAF của AnimeVietsub khi khởi động hoặc gặp 403.
+    /// Handshake lưu trực tiếp WAF cookies vào HTTPCookieStorage & WKWebsiteDataStore,
+    /// cho phép toàn bộ app tải HTML bằng URLSession native trong 100ms - 200ms.
+    func warmupWAFSessionIfNeeded(force: Bool = false, completion: @escaping (Bool) -> Void) {
+        let now = Date().timeIntervalSince1970
+        // Cookie WAF có hiệu lực ít nhất 2 giờ; nếu chưa quá 1 giờ và không ép buộc thì dùng tiếp
+        if !force, (now - lastWAFWarmupTime) < 3600, hasValidWAFCookies() {
+            completion(true)
+            return
+        }
+
+        wafWarmupCompletions.append(completion)
+        guard !isWarmingUpWAF else { return }
+        isWarmingUpWAF = true
+
+        guard let targetURL = URL(string: resolvedDomain + "/") else {
+            finishWAFWarmup(success: false)
+            return
+        }
+
+        var req1 = URLRequest(url: targetURL)
+        req1.timeoutInterval = 6
+        req1.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                      forHTTPHeaderField: "User-Agent")
+        req1.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                      forHTTPHeaderField: "Accept")
+        req1.setValue("vi-VN,vi;q=0.9,en;q=0.7", forHTTPHeaderField: "Accept-Language")
+
+        // Bước 1: Gửi request thăm dò nhận Set-Cookie WAF (thường trả 403 + cookies)
+        URLSession.shared.dataTask(with: req1) { [weak self] _, response, error in
+            guard let self = self else { return }
+            if let httpResp = response as? HTTPURLResponse,
+               let headerFields = httpResp.allHeaderFields as? [String: String],
+               let respURL = httpResp.url {
+                let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: respURL)
+                for c in cookies {
+                    HTTPCookieStorage.shared.setCookie(c)
+                }
+                self.syncCookiesToWebView(cookies)
+            }
+
+            // Bước 2: Thử nghiệm lại với cookies đã nhận
+            var req2 = URLRequest(url: targetURL)
+            req2.timeoutInterval = 6
+            req2.setValue(self.resolvedDomain + "/", forHTTPHeaderField: "Referer")
+            req2.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                          forHTTPHeaderField: "User-Agent")
+            req2.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                          forHTTPHeaderField: "Accept")
+
+            URLSession.shared.dataTask(with: req2) { [weak self] data, response2, error2 in
+                guard let self = self else { return }
+                let status2 = (response2 as? HTTPURLResponse)?.statusCode ?? 0
+                let html2 = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                let isSuccess = (status2 == 200) && Self.isUsableListingHTML(html2, statusCode: status2)
+
+                if isSuccess {
+                    self.lastWAFWarmupTime = Date().timeIntervalSince1970
+                    Logger.shared.log("[WAF] Handshake thành công vượt WAF (HTTP 200, \(html2.count) bytes)")
+                } else {
+                    Logger.shared.log("[WAF] Handshake bước 2 trả về HTTP \(status2), length: \(html2.count)")
+                }
+                self.finishWAFWarmup(success: isSuccess)
+            }.resume()
+        }.resume()
+    }
+
+    private func hasValidWAFCookies() -> Bool {
+        guard let url = URL(string: resolvedDomain) else { return false }
+        let cookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        return cookies.contains { $0.name.contains("session") || $0.name.count == 32 }
+    }
+
+    private func finishWAFWarmup(success: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isWarmingUpWAF = false
+            let callbacks = self.wafWarmupCompletions
+            self.wafWarmupCompletions.removeAll()
+            callbacks.forEach { $0(success) }
+        }
+    }
+
+    private func syncCookiesToWebView(_ cookies: [HTTPCookie]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let cookieStore = self.webView.configuration.websiteDataStore.httpCookieStore
+            for c in cookies {
+                cookieStore.setCookie(c, completionHandler: nil)
+            }
+        }
+    }
+
     private func syncCookiesToURLSession() {
         webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
             for c in cookies {
@@ -608,15 +707,18 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             || lower.contains("ml-item")
             || lower.contains("animevietsub")
             || lower.contains("halim-")
+            || lower.contains("player_data")
+            || lower.contains("movieinfo")
+            || lower.contains("mvtbcn")
         return !isChallenge && hasListingContent
     }
 
-    /// Fast path for list pages. Reuses WKWebView cookies but avoids the DOM polling
-    /// cost when Cloudflare already trusts the current session. A challenge/403 is
-    /// reported as nil so callers can transparently fall back to `fetchHTML`.
-    private func fetchDirectListingHTML(url: URL, completion: @escaping (String?) -> Void) {
+    /// Fast path for list/info/episodes pages. Reuses cookies from HTTPCookieStorage & WKWebView.
+    /// Tải HTML trực tiếp qua native URLSession chỉ mất 50-200ms, không bị nghẽn queue WKWebView.
+    func fetchDirectListingHTML(url: URL, completion: @escaping (String?) -> Void) {
         let startedAt = Date()
-        webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+
+        let performRequest = { (cookies: [HTTPCookie]) in
             let host = url.host?.lowercased() ?? ""
             let matchingCookies = cookies.filter { cookie in
                 let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
@@ -627,7 +729,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             }
 
             var request = URLRequest(url: url)
-            request.timeoutInterval = 4
+            request.timeoutInterval = 6
             request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                              forHTTPHeaderField: "Accept")
             request.setValue("vi-VN,vi;q=0.9,en;q=0.7", forHTTPHeaderField: "Accept-Language")
@@ -643,19 +745,40 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 request.setValue(value, forHTTPHeaderField: name)
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                guard let self = self else { completion(nil); return }
                 let html = data.flatMap { String(data: $0, encoding: .utf8) }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 let accepted = error == nil
                     && html.map { Self.isUsableListingHTML($0, statusCode: status) } == true
                 let elapsed = Int(Date().timeIntervalSince(startedAt) * 1_000)
+
+                // Cập nhật cookies mới nếu server set
+                if let httpResp = response as? HTTPURLResponse,
+                   let headerFields = httpResp.allHeaderFields as? [String: String],
+                   let respURL = httpResp.url {
+                    let newCookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: respURL)
+                    for nc in newCookies { HTTPCookieStorage.shared.setCookie(nc) }
+                    if !newCookies.isEmpty { self.syncCookiesToWebView(newCookies) }
+                }
+
                 Logger.shared.log("[DirectHTML] \(url.path.isEmpty ? "/" : url.path) HTTP \(status), accepted=\(accepted), \(elapsed)ms")
                 DispatchQueue.main.async { completion(accepted ? html : nil) }
             }.resume()
         }
+
+        // Đọc cookies kết hợp từ HTTPCookieStorage và WKWebView DataStore
+        let storageCookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
+        if !storageCookies.isEmpty {
+            performRequest(storageCookies)
+        } else {
+            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                performRequest(cookies)
+            }
+        }
     }
 
-    private func fetchListingHTML(url: String, completion: @escaping (String) -> Void) {
+    func fetchListingHTML(url: String, completion: @escaping (String) -> Void) {
         let execute = { [weak self] in
             guard let self = self, let target = URL(string: url) else { completion(""); return }
             self.fetchDirectListingHTML(url: target) { [weak self] directHTML in
@@ -663,7 +786,20 @@ class NetworkManager: NSObject, WKNavigationDelegate {
                 if let directHTML = directHTML {
                     completion(directHTML)
                 } else {
-                    self.fetchHTML(url: url, completion: completion)
+                    // Nếu direct bị từ chối, kích hoạt Warmup rồi thử lại 1 lần trước khi fallback WKWebView
+                    self.warmupWAFSessionIfNeeded(force: true) { warmedUp in
+                        if warmedUp {
+                            self.fetchDirectListingHTML(url: target) { retriedHTML in
+                                if let retriedHTML = retriedHTML {
+                                    completion(retriedHTML)
+                                } else {
+                                    self.fetchHTML(url: url, completion: completion)
+                                }
+                            }
+                        } else {
+                            self.fetchHTML(url: url, completion: completion)
+                        }
+                    }
                 }
             }
         }
@@ -964,7 +1100,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             return
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard loadId == self.currentLoadId, self.isLoadingHTML else { return }
             
             let jsCheck = """
@@ -1255,7 +1391,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
     // MARK: - Movie details (info page)
 
     /// Fetch trang info phim → parse description, year, rating, banner, genres.
-    /// Cache 24h vì info ít đổi.
+    /// Fast Path URLSession trực tiếp thay vì đè vào hàng đợi tuần tự WKWebView. Cache 24h.
     func fetchMovieDetails(movieUrl: String, completion: @escaping (MovieDetails?) -> Void) {
         let normalizedUrl = normalizeURL(movieUrl)
         let key = "details." + (normalizedUrl.data(using: .utf8)?.base64EncodedString() ?? normalizedUrl)
@@ -1263,7 +1399,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             completion(cached)
             return
         }
-        fetchHTML(url: normalizedUrl) { html in
+        fetchListingHTML(url: normalizedUrl) { html in
             let details = Self.parseDetails(from: html)
             if !details.description.isEmpty || !details.genres.isEmpty {
                 DiskCache.shared.set(details, forKey: key)
@@ -1365,7 +1501,7 @@ class NetworkManager: NSObject, WKNavigationDelegate {
             completion(cached)
             return
         }
-        fetchHTML(url: normalizedUrl) { html in
+        fetchListingHTML(url: normalizedUrl) { html in
             let parsed = Self.parseEpisodes(from: html, movieURL: normalizedUrl)
             
             var uniqueEps: [Episode] = []

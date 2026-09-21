@@ -77,16 +77,11 @@ class Extractor {
     static func resolveStream(episodeUrl: String,
                               isCancelled: @escaping () -> Bool = { false },
                               completion: @escaping (Stream?) -> Void) {
-        // Dùng fetchHTML của NetworkManager (WKWebView) để bypass Cloudflare 403
-        NetworkManager.shared.fetchHTML(url: episodeUrl, isCancelled: isCancelled) { html in
-            guard !isCancelled() else { return completion(nil) }
+        // Thử Fast Path (URLSession native) trước: nếu HTML server-rendered đã có sẵn PLAYER_DATA,
+        // bóc tách ngay trong 100ms mà không cần bắt WKWebView tải trang nặng.
+        let processHTML = { (html: String, isFallback: Bool) -> Bool in
+            guard !isCancelled(), !html.isEmpty else { return false }
 
-            if html.isEmpty {
-                Logger.shared.log("[Extractor] HTML rỗng - WKWebView không tải được trang tập phim")
-                return completion(nil)
-            }
-
-            // Referer mặc định khi luồng trỏ thẳng từ AVS (không qua iframe).
             let defaultReferer = "\(NetworkManager.shared.resolvedDomain)/"
 
             // (a) Thử bóc object PLAYER_DATA.
@@ -110,35 +105,37 @@ class Extractor {
                     let playTech = ((json?["playTech"] as? String)
                         ?? playerDataField("playTech", in: object)
                         ?? "").lowercased()
-                    Logger.shared.log("[Extractor] PLAYER_DATA tìm thấy. playTech=\(playTech) link=\(link)")
+                    Logger.shared.log("[Extractor] PLAYER_DATA tìm thấy (fastPath=\(!isFallback)). playTech=\(playTech) link=\(link)")
 
                     if playTech == "iframe" || link.contains("googleapiscdn") || link.contains("/player/") || link.contains("/embed/") {
-                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { return completion(nil) }
-                        return extractFromIframe(iframeUrl: url.absoluteString, isCancelled: isCancelled, completion: completion)
+                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { completion(nil); return true }
+                        extractFromIframe(iframeUrl: url.absoluteString, isCancelled: isCancelled, completion: completion)
+                        return true
                     } else if link.lowercased().contains(".m3u8") || link.lowercased().contains(".mp4") {
-                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { return completion(nil) }
-                        return completion(Stream(url: url, referer: defaultReferer))
+                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { completion(nil); return true }
+                        completion(Stream(url: url, referer: defaultReferer))
+                        return true
                     } else {
-                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { return completion(nil) }
-                        return extractFromIframe(iframeUrl: url.absoluteString, isCancelled: isCancelled, completion: completion)
+                        guard let url = resolvedURL(link, relativeTo: episodeUrl) else { completion(nil); return true }
+                        extractFromIframe(iframeUrl: url.absoluteString, isCancelled: isCancelled, completion: completion)
+                        return true
                     }
-                } else {
-                    Logger.shared.log("[Extractor] PLAYER_DATA tìm thấy nhưng không có field link: \(object.prefix(200))")
                 }
             }
 
-            // (b) Fallback: hook JS có thể đã chèn m3u8 trực tiếp vào DOM. Bắt luôn.
+            // (b) Fallback: luồng trực tiếp .m3u8/.mp4
             let m3u8Pattern = "(?i)((?:https?:)?//[^\"\'\\s<>]+?\\.(?:m3u8|mp4)[^\"\'\\s<>]*)"
             if let regex = try? NSRegularExpression(pattern: m3u8Pattern),
                let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                let range = Range(match.range(at: 1), in: html) {
                 let raw = htmlDecode(String(html[range]).replacingOccurrences(of: "\\/", with: "/"))
                 Logger.shared.log("[Extractor] Bắt được luồng trực tiếp trong HTML: \(raw)")
-                guard let url = resolvedURL(raw, relativeTo: episodeUrl) else { return completion(nil) }
-                return completion(Stream(url: url, referer: defaultReferer))
+                guard let url = resolvedURL(raw, relativeTo: episodeUrl) else { completion(nil); return true }
+                completion(Stream(url: url, referer: defaultReferer))
+                return true
             }
 
-            // (c) Fallback: hỗ trợ iframe bất kỳ, kể cả URL relative/protocol-relative.
+            // (c) Fallback: iframe player bất kỳ
             let iframePattern = "(?i)<iframe[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
             if let regex = try? NSRegularExpression(pattern: iframePattern) {
                 let candidates = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
@@ -147,26 +144,32 @@ class Extractor {
                         return resolvedURL(String(html[range]), relativeTo: episodeUrl)
                     }
                 let playerHints = ["player", "stream", "embed", "video", "hydrax", "fembed"]
-                guard let iframeURL = candidates.first(where: { url in
+                if let iframeURL = candidates.first(where: { url in
                     playerHints.contains { url.absoluteString.lowercased().contains($0) }
-                }) ?? candidates.first else {
-                    Logger.shared.log("[Extractor] Có thẻ iframe nhưng URL không hợp lệ.")
-                    return completion(nil)
+                }) ?? candidates.first {
+                    Logger.shared.log("[Extractor] Tìm thấy link iframe player: \(iframeURL.absoluteString)")
+                    extractFromIframe(iframeUrl: iframeURL.absoluteString, isCancelled: isCancelled, completion: completion)
+                    return true
                 }
-                Logger.shared.log("[Extractor] Tìm thấy link iframe player: \(iframeURL.absoluteString)")
-                return extractFromIframe(iframeUrl: iframeURL.absoluteString, isCancelled: isCancelled, completion: completion)
             }
+            return false
+        }
 
-            Logger.shared.log("[Extractor] Không tìm thấy PLAYER_DATA hay link luồng trong HTML (\(html.count) ký tự).")
-            // Trích vài ký tự quanh các từ khoá quen thuộc để dễ debug khi server đổi format.
-            for keyword in ["PLAYER_DATA", "playTech", "data-id", "halim-btn", "googleapiscdn", "m3u8", "iframe"] {
-                if let range = html.range(of: keyword) {
-                    let start = html.index(range.lowerBound, offsetBy: -50, limitedBy: html.startIndex) ?? html.startIndex
-                    let end = html.index(range.upperBound, offsetBy: 200, limitedBy: html.endIndex) ?? html.endIndex
-                    Logger.shared.log("[Extractor]   '\(keyword)' xuất hiện: ...\(html[start..<end])...")
+        // Bước 1: Thử Fast Path Native URLSession trước
+        NetworkManager.shared.fetchListingHTML(url: episodeUrl) { fastHTML in
+            guard !isCancelled() else { completion(nil); return }
+            if processHTML(fastHTML, false) {
+                return
+            }
+            // Bước 2: Nếu Fast Path không bắt được (WAF chặn hoặc cần client JS), fallback về WKWebView
+            Logger.shared.log("[Extractor] Fast Path không trích được luồng, kích hoạt WKWebView headless fallback")
+            NetworkManager.shared.fetchHTML(url: episodeUrl, isCancelled: isCancelled) { webHTML in
+                guard !isCancelled() else { completion(nil); return }
+                if !processHTML(webHTML, true) {
+                    Logger.shared.log("[Extractor] Không tìm thấy PLAYER_DATA hay link luồng trong HTML (\(webHTML.count) ký tự).")
+                    completion(nil)
                 }
             }
-            completion(nil)
         }
     }
 

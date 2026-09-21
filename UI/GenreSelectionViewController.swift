@@ -130,14 +130,14 @@ class GenreCell: UICollectionViewCell {
     
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.backgroundColor = UIColor.systemRed.withAlphaComponent(0.06)
+        contentView.backgroundColor = AppTheme.cardBackgroundLighter
         contentView.layer.cornerRadius = 20
         contentView.layer.borderWidth = 1.2
-        contentView.layer.borderColor = UIColor.separator.cgColor
+        contentView.layer.borderColor = AppTheme.borderGlass.cgColor
         contentView.clipsToBounds = true
         
-        titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        titleLabel.textColor = .label
+        titleLabel.font = AppTheme.Fonts.caption(size: 13)
+        titleLabel.textColor = AppTheme.textSecondary
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(titleLabel)
@@ -157,19 +157,21 @@ class GenreCell: UICollectionViewCell {
             accessibilityTraits = isSelected ? [.button, .selected] : [.button]
             let update = {
                 if self.isSelected {
-                    self.contentView.backgroundColor = UIColor.systemRed.withAlphaComponent(0.15)
-                    self.contentView.layer.borderColor = UIColor.systemRed.cgColor
-                    self.titleLabel.textColor = .systemRed
-                    self.titleLabel.font = .systemFont(ofSize: 14, weight: .bold)
+                    self.contentView.backgroundColor = AppTheme.primaryAccent.withAlphaComponent(0.25)
+                    self.contentView.layer.borderColor = AppTheme.primaryAccent.cgColor
+                    self.titleLabel.textColor = .white
+                    self.titleLabel.font = AppTheme.Fonts.subhead(size: 13)
+                    AppTheme.applyGlow(to: self.contentView, color: AppTheme.primaryAccent, radius: 8, opacity: 0.5)
                 } else {
-                    self.contentView.backgroundColor = UIColor.systemRed.withAlphaComponent(0.06)
-                    self.contentView.layer.borderColor = UIColor.separator.cgColor
-                    self.titleLabel.textColor = .label
-                    self.titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+                    self.contentView.backgroundColor = AppTheme.cardBackgroundLighter
+                    self.contentView.layer.borderColor = AppTheme.borderGlass.cgColor
+                    self.titleLabel.textColor = AppTheme.textSecondary
+                    self.titleLabel.font = AppTheme.Fonts.caption(size: 13)
+                    self.contentView.layer.shadowOpacity = 0
                 }
             }
             guard !UIAccessibility.isReduceMotionEnabled else { update(); return }
-            UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut], animations: update)
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.beginFromCurrentState, .curveEaseOut], animations: update)
         }
     }
 }

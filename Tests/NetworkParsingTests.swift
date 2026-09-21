@@ -187,5 +187,13 @@ final class NetworkParsingTests: XCTestCase {
         XCTAssertEqual(NetworkManager.primaryRedirectURL, "https://bit.ly/animevietsubtv")
         XCTAssertTrue(NetworkManager.shared.resolvedDomain.contains("animevietsub"))
     }
+
+    func testIsUsableListingHTMLAcceptsPlayerDataAndMovieDetails() {
+        let watchHTML = #"<script>var PLAYER_DATA = {"link":"https://storage.googleapiscdn.com/player/test"};</script>"#
+        XCTAssertTrue(NetworkManager.isUsableListingHTML(watchHTML, statusCode: 200))
+
+        let infoHTML = #"<div class="MovieInfo"><p>Anime hay</p></div>"#
+        XCTAssertTrue(NetworkManager.isUsableListingHTML(infoHTML, statusCode: 200))
+    }
 }
 

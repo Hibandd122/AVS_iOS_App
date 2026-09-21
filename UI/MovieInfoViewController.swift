@@ -16,6 +16,7 @@ class MovieInfoViewController: UIViewController {
     private let favButton = UIButton(type: .system)
     private let continueButton = UIButton(type: .system)
     private let loader = UIActivityIndicatorView(style: .medium)
+    private let descSkeleton = SkeletonView()
 
     private var episodes: [Episode] = []
     private var details: MovieDetails?
@@ -55,8 +56,31 @@ class MovieInfoViewController: UIViewController {
         favButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
         favButton.accessibilityLabel = "Yêu thích"
         favButton.addTarget(self, action: #selector(toggleFavorite), for: .touchUpInside)
-        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: favButton)
+
+        let shareButton = UIButton(type: .system)
+        shareButton.translatesAutoresizingMaskIntoConstraints = false
+        shareButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        shareButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        shareButton.setImage(UIImage(systemName: "square.and.arrow.up"), for: .normal)
+        shareButton.tintColor = AppTheme.textPrimary
+        shareButton.accessibilityLabel = "Chia sẻ"
+        shareButton.addTarget(self, action: #selector(shareMovie), for: .touchUpInside)
+
+        let favBarItem = UIBarButtonItem(customView: favButton)
+        let shareBarItem = UIBarButtonItem(customView: shareButton)
+        navigationItem.rightBarButtonItems = [favBarItem, shareBarItem]
         refreshFavButton()
+    }
+
+    @objc private func shareMovie() {
+        guard let movie = movie else { return }
+        let shareUrl = movie.link.hasPrefix("http") ? movie.link : "\(NetworkManager.shared.resolvedDomain)\(movie.link)"
+        let text = "Xem anime \(movie.title) trên AnimeVietsub:"
+        let activityVC = UIActivityViewController(activityItems: [text, shareUrl], applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.barButtonItem = navigationItem.rightBarButtonItems?.last
+        }
+        present(activityVC, animated: true)
     }
 
     private func refreshFavButton() {
@@ -184,7 +208,14 @@ class MovieInfoViewController: UIViewController {
         styleAccentButton(allEpisodesButton, accent: false)
         allEpisodesButton.addTarget(self, action: #selector(showAllEpisodes), for: .touchUpInside)
 
-        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, allEpisodesButton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
+        descSkeleton.translatesAutoresizingMaskIntoConstraints = false
+        descSkeleton.layer.cornerRadius = 16
+        descSkeleton.clipsToBounds = true
+        descSkeleton.startShimmer()
+
+        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, allEpisodesButton, descSkeleton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
+
+        descLabel.isHidden = true
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -196,7 +227,8 @@ class MovieInfoViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor, constant: -16),
             stack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: -24),
             stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -32),
-            genreScroll.heightAnchor.constraint(equalToConstant: 34)
+            genreScroll.heightAnchor.constraint(equalToConstant: 34),
+            descSkeleton.heightAnchor.constraint(equalToConstant: 78)
         ])
     }
 
@@ -247,6 +279,10 @@ class MovieInfoViewController: UIViewController {
             metaParts.append(movie.episodeStatus)
         }
         metaLabel.text = metaParts.joined(separator: "   •   ")
+
+        descSkeleton.stopShimmer()
+        descSkeleton.isHidden = true
+        descLabel.isHidden = false
 
         descLabel.text = d.description.isEmpty ? "(Chưa có mô tả)" : d.description
         isDescriptionExpanded = false

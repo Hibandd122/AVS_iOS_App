@@ -34,8 +34,7 @@ class MovieListViewController: UIViewController, UICollectionViewDataSource, UIC
     private var collectionView: UICollectionView!
     private var movies: [Movie] = []
     private var historySubtitles: [Int: String] = [:]
-    private let emptyLabel = UILabel()
-    private let emptyIcon = UIImageView()
+    private let stateView = StateView()
     private var lastLayoutWidth: CGFloat = 0
 
     override func viewDidLoad() {
@@ -43,7 +42,7 @@ class MovieListViewController: UIViewController, UICollectionViewDataSource, UIC
         title = source.title
         view.backgroundColor = AppTheme.backgroundDark
         setupCollection()
-        setupEmptyLabel()
+        setupStateView()
         if source == .history {
             navigationItem.rightBarButtonItem = UIBarButtonItem(
                 image: UIImage(systemName: "trash"),
@@ -97,31 +96,14 @@ class MovieListViewController: UIViewController, UICollectionViewDataSource, UIC
         layout.invalidateLayout()
     }
 
-    private func setupEmptyLabel() {
-        emptyLabel.text = source.emptyText
-        emptyLabel.font = AppTheme.Fonts.body(size: 15)
-        emptyLabel.adjustsFontForContentSizeCategory = true
-        emptyLabel.textColor = AppTheme.textSecondary
-        emptyLabel.textAlignment = .center
-        emptyLabel.numberOfLines = 0
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        emptyIcon.image = UIImage(systemName: source.emptyIcon,
-                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 42, weight: .light))
-        emptyIcon.tintColor = AppTheme.surfaceGlass
-        emptyIcon.contentMode = .scaleAspectFit
-        emptyIcon.translatesAutoresizingMaskIntoConstraints = false
-        emptyIcon.isAccessibilityElement = false
-        view.addSubview(emptyIcon)
-        view.addSubview(emptyLabel)
+    private func setupStateView() {
+        stateView.translatesAutoresizingMaskIntoConstraints = false
+        stateView.isHidden = true
+        view.addSubview(stateView)
         NSLayoutConstraint.activate([
-            emptyLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 26),
-            emptyLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
-            emptyLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
-            emptyIcon.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            emptyIcon.bottomAnchor.constraint(equalTo: emptyLabel.topAnchor, constant: -16),
-            emptyIcon.widthAnchor.constraint(equalToConstant: 52),
-            emptyIcon.heightAnchor.constraint(equalTo: emptyIcon.widthAnchor)
+            stateView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            stateView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            stateView.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])
     }
 
@@ -138,8 +120,17 @@ class MovieListViewController: UIViewController, UICollectionViewDataSource, UIC
             movies = PlaybackStore.shared.favorites()
         }
         collectionView.reloadData()
-        emptyLabel.isHidden = !movies.isEmpty
-        emptyIcon.isHidden = !movies.isEmpty
+        
+        let isEmpty = movies.isEmpty
+        stateView.isHidden = !isEmpty
+        if isEmpty {
+            stateView.configure(
+                iconName: source.emptyIcon,
+                title: source.title,
+                subtitle: source.emptyText,
+                buttonTitle: nil
+            )
+        }
     }
 
     @objc private func clearAll() {

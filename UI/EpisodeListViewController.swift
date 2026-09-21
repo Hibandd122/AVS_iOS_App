@@ -6,7 +6,7 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
     var episodes: [Episode] = []
     var collectionView: UICollectionView!
     private let loader = UIActivityIndicatorView(style: .large)
-    private let emptyLabel = UILabel()
+    private let stateView = StateView()
     private var lastLayoutWidth: CGFloat = 0
     private var currentEpisodeIndex: Int?
 
@@ -17,7 +17,7 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
 
         setupCollectionView()
         setupLoader()
-        setupEmptyLabel()
+        setupStateView()
         fetchEpisodes()
     }
 
@@ -86,21 +86,17 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
         ])
     }
 
-    private func setupEmptyLabel() {
-        emptyLabel.text = "Không tải được danh sách tập.\nKéo xuống để thử lại."
-        emptyLabel.font = AppTheme.Fonts.body(size: 15)
-        emptyLabel.adjustsFontForContentSizeCategory = true
-        emptyLabel.textColor = AppTheme.textSecondary
-        emptyLabel.textAlignment = .center
-        emptyLabel.numberOfLines = 0
-        emptyLabel.isHidden = true
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(emptyLabel)
+    private func setupStateView() {
+        stateView.translatesAutoresizingMaskIntoConstraints = false
+        stateView.isHidden = true
+        stateView.onRetryTap = { [weak self] in
+            self?.refresh(UIRefreshControl())
+        }
+        view.addSubview(stateView)
         NSLayoutConstraint.activate([
-            emptyLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
-            emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24)
+            stateView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            stateView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            stateView.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])
     }
 
@@ -116,7 +112,7 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
 
     private func fetchEpisodes() {
         guard let movie = movie else { return }
-        emptyLabel.isHidden = true
+        stateView.isHidden = true
         if episodes.isEmpty { loader.startAnimating() }
         NetworkManager.shared.fetchEpisodes(movieUrl: movie.link) { [weak self] fetched in
             guard let self = self else { return }
@@ -125,7 +121,18 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
             self.loader.stopAnimating()
             self.collectionView.refreshControl?.endRefreshing()
             self.collectionView.reloadData()
-            self.emptyLabel.isHidden = !fetched.isEmpty
+            
+            let isEmpty = fetched.isEmpty
+            self.stateView.isHidden = !isEmpty
+            if isEmpty {
+                self.stateView.configure(
+                    iconName: "wifi.slash",
+                    title: "Chưa Có Tập Phim",
+                    subtitle: "Không thể tải danh sách tập hoặc phim đang cập nhật.",
+                    buttonTitle: "Thử lại ngay"
+                )
+            }
+
             if let index = self.currentEpisodeIndex, fetched.indices.contains(index) {
                 DispatchQueue.main.async {
                     guard self.collectionView.numberOfItems(inSection: 0) > index else { return }

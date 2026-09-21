@@ -49,6 +49,16 @@ class PlayerController: UIViewController {
         return UserDefaults.standard.bool(forKey: "auto_skip_outro")
     }
 
+    // Gesture HUD Indicators
+    private let gestureHudContainer = UIView()
+    private let gestureHudIcon = UIImageView()
+    private let gestureHudLabel = UILabel()
+    private let gestureHudProgress = UIProgressView(progressViewStyle: .default)
+    private var gestureHudDismissWork: DispatchWorkItem?
+    private let seekRippleIndicator = UIView()
+    private let seekRippleLabel = UILabel()
+    private let seekRippleIcon = UIImageView()
+
     private weak var currentPlayer: AVPlayer?
     private weak var currentPlayerVC: AVPlayerViewController?
 
@@ -65,6 +75,7 @@ class PlayerController: UIViewController {
 
         setupLoadingUI()
         setupSkipUI()
+        setupGestureHudUI()
         setupNavBarItems()
         setupGestureHandler()
         updateEpisodeInfo()
@@ -281,8 +292,128 @@ class PlayerController: UIViewController {
             skipToastLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 240)
         ])
     }
-    
-    private func checkSkip(currentTime: Double) {
+
+    private func setupGestureHudUI() {
+        // Container Glassmorphism cho HUD Volume & Brightness
+        gestureHudContainer.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudContainer.backgroundColor = AppTheme.cardBackground.withAlphaComponent(0.88)
+        gestureHudContainer.layer.cornerRadius = 20
+        gestureHudContainer.layer.borderWidth = 1
+        gestureHudContainer.layer.borderColor = AppTheme.borderGlass.cgColor
+        gestureHudContainer.clipsToBounds = true
+        gestureHudContainer.alpha = 0.0
+        AppTheme.applyGlow(to: gestureHudContainer, color: .black, radius: 16, opacity: 0.5)
+        view.addSubview(gestureHudContainer)
+
+        gestureHudIcon.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudIcon.tintColor = AppTheme.vipGold
+        gestureHudIcon.contentMode = .scaleAspectFit
+        gestureHudContainer.addSubview(gestureHudIcon)
+
+        gestureHudLabel.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudLabel.font = AppTheme.Fonts.subhead(size: 14)
+        gestureHudLabel.textColor = AppTheme.textPrimary
+        gestureHudContainer.addSubview(gestureHudLabel)
+
+        gestureHudProgress.translatesAutoresizingMaskIntoConstraints = false
+        gestureHudProgress.progressTintColor = AppTheme.primaryAccent
+        gestureHudProgress.trackTintColor = UIColor.white.withAlphaComponent(0.15)
+        gestureHudProgress.layer.cornerRadius = 2
+        gestureHudProgress.clipsToBounds = true
+        gestureHudContainer.addSubview(gestureHudProgress)
+
+        // Ripple indicator cho Double-tap seek (+10s / -10s)
+        seekRippleIndicator.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleIndicator.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        seekRippleIndicator.layer.cornerRadius = 35
+        seekRippleIndicator.layer.borderWidth = 1
+        seekRippleIndicator.layer.borderColor = AppTheme.borderHighlight.cgColor
+        seekRippleIndicator.clipsToBounds = true
+        seekRippleIndicator.alpha = 0.0
+        view.addSubview(seekRippleIndicator)
+
+        seekRippleIcon.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleIcon.tintColor = .white
+        seekRippleIcon.contentMode = .scaleAspectFit
+        seekRippleIndicator.addSubview(seekRippleIcon)
+
+        seekRippleLabel.translatesAutoresizingMaskIntoConstraints = false
+        seekRippleLabel.font = AppTheme.Fonts.badge(size: 12)
+        seekRippleLabel.textColor = .white
+        seekRippleLabel.textAlignment = .center
+        seekRippleIndicator.addSubview(seekRippleLabel)
+
+        NSLayoutConstraint.activate([
+            gestureHudContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            gestureHudContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 28),
+            gestureHudContainer.widthAnchor.constraint(equalToConstant: 220),
+            gestureHudContainer.heightAnchor.constraint(equalToConstant: 46),
+
+            gestureHudIcon.leadingAnchor.constraint(equalTo: gestureHudContainer.leadingAnchor, constant: 14),
+            gestureHudIcon.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudIcon.widthAnchor.constraint(equalToConstant: 22),
+            gestureHudIcon.heightAnchor.constraint(equalToConstant: 22),
+
+            gestureHudLabel.leadingAnchor.constraint(equalTo: gestureHudIcon.trailingAnchor, constant: 10),
+            gestureHudLabel.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudLabel.widthAnchor.constraint(equalToConstant: 44),
+
+            gestureHudProgress.leadingAnchor.constraint(equalTo: gestureHudLabel.trailingAnchor, constant: 8),
+            gestureHudProgress.trailingAnchor.constraint(equalTo: gestureHudContainer.trailingAnchor, constant: -14),
+            gestureHudProgress.centerYAnchor.constraint(equalTo: gestureHudContainer.centerYAnchor),
+            gestureHudProgress.heightAnchor.constraint(equalToConstant: 5),
+
+            seekRippleIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            seekRippleIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            seekRippleIndicator.widthAnchor.constraint(equalToConstant: 100),
+            seekRippleIndicator.heightAnchor.constraint(equalToConstant: 70),
+
+            seekRippleIcon.centerXAnchor.constraint(equalTo: seekRippleIndicator.centerXAnchor),
+            seekRippleIcon.topAnchor.constraint(equalTo: seekRippleIndicator.topAnchor, constant: 12),
+            seekRippleIcon.widthAnchor.constraint(equalToConstant: 24),
+            seekRippleIcon.heightAnchor.constraint(equalToConstant: 24),
+
+            seekRippleLabel.centerXAnchor.constraint(equalTo: seekRippleIndicator.centerXAnchor),
+            seekRippleLabel.topAnchor.constraint(equalTo: seekRippleIcon.bottomAnchor, constant: 4)
+        ])
+    }
+
+    private func showGestureHud(icon: String, percent: Float) {
+        gestureHudDismissWork?.cancel()
+        gestureHudIcon.image = UIImage(systemName: icon)
+        let displayPercent = Int(round(percent * 100))
+        gestureHudLabel.text = "\(displayPercent)%"
+        gestureHudProgress.setProgress(percent, animated: false)
+
+        view.bringSubviewToFront(gestureHudContainer)
+        UIView.animate(withDuration: 0.15) {
+            self.gestureHudContainer.alpha = 1.0
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.3) {
+                self?.gestureHudContainer.alpha = 0.0
+            }
+        }
+        gestureHudDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    private func showSeekRipple(isForward: Bool) {
+        seekRippleIcon.image = UIImage(systemName: isForward ? "goforward.10" : "gobackward.10")
+        seekRippleLabel.text = isForward ? "+10s" : "-10s"
+
+        view.bringSubviewToFront(seekRippleIndicator)
+        seekRippleIndicator.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
+        UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.6, initialSpringVelocity: 0.8, options: .beginFromCurrentState) {
+            self.seekRippleIndicator.alpha = 1.0
+            self.seekRippleIndicator.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.25, delay: 0.4, options: .curveEaseOut) {
+                self.seekRippleIndicator.alpha = 0.0
+            }
+        }
+    }
         guard let duration = currentPlayerItem?.duration.seconds, duration.isFinite else { return }
         
         var showType: String?
@@ -1078,14 +1209,26 @@ extension PlayerController: PlayerGestureHandlerDelegate {
         let delta: Double = isForward ? 10.0 : -10.0
         let newTime = max(0, currentSeconds + delta)
         player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
+        showSeekRipple(isForward: isForward)
         Logger.shared.log("[PlayerController] Gesture DoubleTapSeek: \(isForward ? "+10s" : "-10s") -> \(newTime)s")
     }
 
     func didChangeBrightness(level: CGFloat) {
+        showGestureHud(icon: "sun.max.fill", percent: Float(level))
         Logger.shared.log("[PlayerController] Gesture Brightness: \(Int(level * 100))%")
     }
 
-    func didChangeVolume(level: Float) {
-        Logger.shared.log("[PlayerController] Gesture Volume delta: \(level)")
+    func didChangeVolume(delta: Float) {
+        // Cập nhật âm lượng cục bộ của player
+        guard let player = currentPlayer else { return }
+        let currentVol = player.volume
+        let newVol = max(0.0, min(1.0, currentVol + delta))
+        player.volume = newVol
+        showGestureHud(icon: newVol > 0 ? "speaker.wave.3.fill" : "speaker.slash.fill", percent: newVol)
+        Logger.shared.log("[PlayerController] Gesture Volume: \(Int(newVol * 100))%")
+    }
+
+    func didEndGesture() {
+        // Gesture kết thúc
     }
 }

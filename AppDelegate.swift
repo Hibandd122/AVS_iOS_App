@@ -8,6 +8,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
         try? AVAudioSession.sharedInstance().setActive(true)
 
+        // Khởi động warmup WAF session ngay khi mở app để sẵn sàng các request Fast Path
+        NetworkManager.shared.warmupWAFSessionIfNeeded { _ in }
+
         let appearance = UINavigationBarAppearance()
         appearance.configureWithTransparentBackground()
         appearance.backgroundColor = .clear
