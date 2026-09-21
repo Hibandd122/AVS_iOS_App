@@ -414,6 +414,8 @@ class PlayerController: UIViewController {
             }
         }
     }
+
+    private func checkSkip(currentTime: Double) {
         guard let duration = currentPlayerItem?.duration.seconds, duration.isFinite else { return }
         
         var showType: String?
