@@ -122,6 +122,10 @@ final class PlaybackStore {
         defaults.removeObject(forKey: durationKey)
     }
 
+    func clearAllHistory() {
+        clearHistory()
+    }
+
     func markCompleted(movie: Movie) {
         var list = history()
         guard let index = list.firstIndex(where: { $0.movie.persistenceID == movie.persistenceID }) else { return }

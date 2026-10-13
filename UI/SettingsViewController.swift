@@ -513,7 +513,7 @@ final class SettingsViewController: UIViewController {
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Huỷ", style: .cancel))
         alert.addAction(UIAlertAction(title: "Xóa tất cả", style: .destructive) { _ in
-            PlaybackStore.shared.clearAllHistory()
+            PlaybackStore.shared.clearHistory()
             let feedback = UINotificationFeedbackGenerator()
             feedback.notificationOccurred(.success)
         })
