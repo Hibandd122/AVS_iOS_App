@@ -48,6 +48,22 @@ class PlayerController: UIViewController {
         if UserDefaults.standard.object(forKey: "auto_skip_outro") == nil { return true }
         return UserDefaults.standard.bool(forKey: "auto_skip_outro")
     }
+    private var isShowSkipToastEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "show_skip_toast") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "show_skip_toast")
+    }
+    private var isAutoNextEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "player_auto_next") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "player_auto_next")
+    }
+    private var configuredSeekInterval: Double {
+        let val = UserDefaults.standard.integer(forKey: "player_seek_interval")
+        return val > 0 ? Double(val) : 10.0
+    }
+    private var defaultPlaybackSpeed: Float {
+        let saved = UserDefaults.standard.float(forKey: "player_default_speed")
+        return saved > 0 ? saved : 1.0
+    }
 
     // Gesture HUD Indicators
     private let gestureHudContainer = UIView()
@@ -72,6 +88,7 @@ class PlayerController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        preferredPlaybackRate = defaultPlaybackSpeed
 
         setupLoadingUI()
         setupSkipUI()
@@ -400,8 +417,13 @@ class PlayerController: UIViewController {
     }
 
     private func showSeekRipple(isForward: Bool) {
-        seekRippleIcon.image = UIImage(systemName: isForward ? "goforward.10" : "gobackward.10")
-        seekRippleLabel.text = isForward ? "+10s" : "-10s"
+        let interval = Int(configuredSeekInterval)
+        let iconName = interval == 5 ? (isForward ? "goforward.5" : "gobackward.5") :
+                       interval == 15 ? (isForward ? "goforward.15" : "gobackward.15") :
+                       interval == 30 ? (isForward ? "goforward.30" : "gobackward.30") :
+                       (isForward ? "goforward.10" : "gobackward.10")
+        seekRippleIcon.image = UIImage(systemName: iconName) ?? UIImage(systemName: isForward ? "goforward" : "gobackward")
+        seekRippleLabel.text = isForward ? "+\(interval)s" : "-\(interval)s"
 
         view.bringSubviewToFront(seekRippleIndicator)
         seekRippleIndicator.transform = CGAffineTransform(scaleX: 0.75, y: 0.75)
@@ -490,6 +512,7 @@ class PlayerController: UIViewController {
     }
 
     private func showSkipToast(message: String) {
+        guard isShowSkipToastEnabled else { return }
         skipToastLabel.text = "  \(message)  "
         skipToastLabel.isHidden = false
         view.bringSubviewToFront(skipToastLabel)
@@ -627,13 +650,19 @@ class PlayerController: UIViewController {
             Logger.shared.log("[ErrorLog] URI=\(last.uri ?? "?") status=\(last.errorStatusCode) domain=\(last.errorDomain) comment=\(last.errorComment ?? "?")")
         }
 
-        // Auto-next: khi item phát hết, nhảy sang tập tiếp theo (nếu còn).
+        // Auto-next: khi item phát hết, nhảy sang tập tiếp theo (nếu còn và được bật trong cài đặt).
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
         ) { [weak self] _ in
-            self?.playNextEpisodeIfAvailable(markCurrentCompleted: true)
+            guard let self = self else { return }
+            if self.isAutoNextEnabled {
+                self.playNextEpisodeIfAvailable(markCurrentCompleted: true)
+            } else {
+                if let url = self.episodeUrl { PlaybackStore.shared.clearPosition(for: url) }
+                Logger.shared.log("[PlayerController] Đã phát hết tập, auto-next đang tắt.")
+            }
         }
 
         // Dump state mỗi 2s trong 12s đầu — không cần KVO trên mỗi property riêng.
@@ -1035,10 +1064,11 @@ final class EpisodePickerViewController: UIViewController, UICollectionViewDataS
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = AppTheme.backgroundDark
 
-        titleLabel.text = "Chọn tập"
-        titleLabel.font = .systemFont(ofSize: 17, weight: .bold)
+        titleLabel.text = "Chọn tập phim"
+        titleLabel.font = AppTheme.Fonts.title(size: 18)
+        titleLabel.textColor = AppTheme.textPrimary
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)
@@ -1060,11 +1090,11 @@ final class EpisodePickerViewController: UIViewController, UICollectionViewDataS
         view.addSubview(collectionView)
 
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
-            collectionView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            collectionView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
@@ -1107,7 +1137,7 @@ final class EpisodePickerCell: UICollectionViewCell {
         super.init(frame: frame)
         contentView.layer.cornerRadius = 10
         contentView.clipsToBounds = true
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.font = AppTheme.Fonts.subhead(size: 13)
         label.textAlignment = .center
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.7
@@ -1126,14 +1156,19 @@ final class EpisodePickerCell: UICollectionViewCell {
         accessibilityLabel = title.isEmpty ? "Tập \(number)" : title
         accessibilityTraits = isCurrent ? [.button, .selected] : [.button]
         if isCurrent {
-            contentView.backgroundColor = UIColor.systemRed
+            contentView.backgroundColor = AppTheme.primaryAccent
+            contentView.layer.borderWidth = 0
             label.textColor = .white
-            label.font = .systemFont(ofSize: 13, weight: .bold)
+            label.font = AppTheme.Fonts.badge(size: 13)
             label.text = "▶ \(number)"
+            AppTheme.applyGlow(to: contentView, color: AppTheme.primaryAccent, radius: 8, opacity: 0.5)
         } else {
-            contentView.backgroundColor = .secondarySystemBackground
-            label.textColor = .label
-            label.font = .systemFont(ofSize: 13, weight: .semibold)
+            contentView.backgroundColor = AppTheme.cardBackgroundLighter
+            contentView.layer.borderWidth = 1
+            contentView.layer.borderColor = AppTheme.borderGlass.cgColor
+            contentView.layer.shadowOpacity = 0
+            label.textColor = AppTheme.textPrimary
+            label.font = AppTheme.Fonts.subhead(size: 13)
             label.text = "\(number)"
         }
     }
@@ -1152,10 +1187,11 @@ final class SpeedPickerViewController: UIViewController, UITableViewDataSource, 
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = AppTheme.backgroundDark
 
         titleLabel.text = "Tốc độ phát"
-        titleLabel.font = .systemFont(ofSize: 17, weight: .bold)
+        titleLabel.font = AppTheme.Fonts.title(size: 18)
+        titleLabel.textColor = AppTheme.textPrimary
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)
@@ -1165,15 +1201,17 @@ final class SpeedPickerViewController: UIViewController, UITableViewDataSource, 
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.isScrollEnabled = false
+        tableView.backgroundColor = .clear
+        tableView.separatorColor = AppTheme.borderGlass
         tableView.separatorStyle = .singleLine
         view.addSubview(tableView)
 
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
-            tableView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            tableView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
@@ -1186,11 +1224,11 @@ final class SpeedPickerViewController: UIViewController, UITableViewDataSource, 
         let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
         let speed = speeds[indexPath.row]
         let isCurrent = abs(speed - currentSpeed) < 0.01
-        cell.textLabel?.text = speed == 1.0 ? "1x (thường)" : "\(speed)x"
-        cell.textLabel?.font = .systemFont(ofSize: 16, weight: isCurrent ? .bold : .regular)
-        cell.textLabel?.textColor = isCurrent ? .systemRed : .label
+        cell.textLabel?.text = speed == 1.0 ? "1x (Bình thường)" : "\(speed)x"
+        cell.textLabel?.font = isCurrent ? AppTheme.Fonts.badge(size: 16) : AppTheme.Fonts.body(size: 16)
+        cell.textLabel?.textColor = isCurrent ? AppTheme.primaryAccent : AppTheme.textPrimary
         cell.accessoryType = isCurrent ? .checkmark : .none
-        cell.tintColor = .systemRed
+        cell.tintColor = AppTheme.primaryAccent
         cell.backgroundColor = .clear
         return cell
     }
@@ -1208,11 +1246,12 @@ extension PlayerController: PlayerGestureHandlerDelegate {
         guard let player = currentPlayer else { return }
         let currentSeconds = player.currentTime().seconds
         guard currentSeconds.isFinite else { return }
-        let delta: Double = isForward ? 10.0 : -10.0
+        let step = configuredSeekInterval
+        let delta: Double = isForward ? step : -step
         let newTime = max(0, currentSeconds + delta)
         player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
         showSeekRipple(isForward: isForward)
-        Logger.shared.log("[PlayerController] Gesture DoubleTapSeek: \(isForward ? "+10s" : "-10s") -> \(newTime)s")
+        Logger.shared.log("[PlayerController] Gesture DoubleTapSeek: \(isForward ? "+\(Int(step))s" : "-\(Int(step))s") -> \(newTime)s")
     }
 
     func didChangeBrightness(level: CGFloat) {

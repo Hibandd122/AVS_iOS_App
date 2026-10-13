@@ -70,8 +70,42 @@ final class TabCoordinator: Coordinator {
         favoritesNav.tabBarItem.accessibilityLabel = "Phim yêu thích"
         favoritesNav.tabBarItem.imageInsets = UIEdgeInsets(top: 6, left: 0, bottom: -6, right: 0)
 
-        tabBarController.viewControllers = [homeNav, historyNav, favoritesNav]
-        tabBarController.tabBar.tintColor = .accent
+        let settingsVC = SettingsViewController()
+        let settingsNav = UINavigationController(rootViewController: settingsVC)
+        settingsNav.tabBarItem = UITabBarItem(title: nil, image: UIImage(systemName: "gearshape"), selectedImage: UIImage(systemName: "gearshape.fill"))
+        settingsNav.tabBarItem.accessibilityLabel = "Cài đặt"
+        settingsNav.tabBarItem.imageInsets = UIEdgeInsets(top: 6, left: 0, bottom: -6, right: 0)
+
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground()
+        appearance.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 0.92)
+        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+        appearance.shadowColor = UIColor(white: 1.0, alpha: 0.12) // Subtle glowing top border
+
+        let itemAppearance = UITabBarItemAppearance()
+        itemAppearance.normal.iconColor = UIColor(white: 0.55, alpha: 1.0)
+        itemAppearance.normal.titleTextAttributes = [
+            .foregroundColor: UIColor(white: 0.55, alpha: 1.0),
+            .font: AppTheme.Fonts.caption(size: 11)
+        ]
+        itemAppearance.selected.iconColor = AppTheme.primaryAccent
+        itemAppearance.selected.titleTextAttributes = [
+            .foregroundColor: AppTheme.primaryAccent,
+            .font: AppTheme.Fonts.caption(size: 11)
+        ]
+
+        appearance.stackedLayoutAppearance = itemAppearance
+        appearance.inlineLayoutAppearance = itemAppearance
+        appearance.compactInlineLayoutAppearance = itemAppearance
+
+        tabBarController.tabBar.standardAppearance = appearance
+        if #available(iOS 15.0, *) {
+            tabBarController.tabBar.scrollEdgeAppearance = appearance
+        }
+        tabBarController.tabBar.tintColor = AppTheme.primaryAccent
+        tabBarController.tabBar.unselectedItemTintColor = UIColor(white: 0.55, alpha: 1.0)
+
+        tabBarController.viewControllers = [homeNav, historyNav, favoritesNav, settingsNav]
         tabBarController.selectedIndex = 0
 
         navigationController.setViewControllers([tabBarController], animated: false)

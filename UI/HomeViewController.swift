@@ -64,6 +64,18 @@ final class HomeViewController: UIViewController {
         navigationItem.title = "AnimeVietsub"
         view.backgroundColor = AppTheme.backgroundDark
 
+        let bgView = BackgroundView()
+        bgView.setStyle(.accent)
+        bgView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bgView)
+        view.sendSubviewToBack(bgView)
+        NSLayoutConstraint.activate([
+            bgView.topAnchor.constraint(equalTo: view.topAnchor),
+            bgView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bgView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bgView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         setupCollectionView()
         setupDataSource()
         setupNavigationItems()
@@ -752,9 +764,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        contentView.layer.cornerRadius = 14
+        contentView.layer.cornerRadius = 18
         contentView.layer.borderWidth = 1
-        contentView.layer.borderColor = AppTheme.borderGlass.cgColor
+        contentView.layer.borderColor = AppTheme.borderHighlight.cgColor
         contentView.clipsToBounds = true
         contentView.backgroundColor = AppTheme.cardBackground
 
@@ -764,16 +776,22 @@ final class ContinueWatchingCell: UICollectionViewCell {
         imageView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(imageView)
 
-        overlayGradient.colors = [UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.92).cgColor]
-        overlayGradient.locations = [0.3, 1.0]
+        overlayGradient.colors = [
+            UIColor.clear.cgColor,
+            UIColor.black.withAlphaComponent(0.35).cgColor,
+            UIColor.black.withAlphaComponent(0.95).cgColor
+        ]
+        overlayGradient.locations = [0.25, 0.65, 1.0]
         imageView.layer.addSublayer(overlayGradient)
 
-        // Circular Play Overlay in Center
-        playOverlay.layer.cornerRadius = 18
+        // Circular Frosted Play Button in Center with Crimson Glow
+        playOverlay.layer.cornerRadius = 20
         playOverlay.clipsToBounds = true
         playOverlay.layer.borderWidth = 1
-        playOverlay.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        playOverlay.layer.borderColor = AppTheme.borderHighlight.cgColor
+        playOverlay.contentView.backgroundColor = AppTheme.primaryAccent.withAlphaComponent(0.3)
         playOverlay.translatesAutoresizingMaskIntoConstraints = false
+        AppTheme.applyGlow(to: playOverlay, color: AppTheme.primaryAccent, radius: 10, opacity: 0.6)
         contentView.addSubview(playOverlay)
 
         playIcon.image = UIImage(systemName: "play.fill")
@@ -793,12 +811,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
         progressLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(progressLabel)
 
-        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.15)
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(progressTrack)
 
         progressBar.backgroundColor = AppTheme.primaryAccent
         progressBar.translatesAutoresizingMaskIntoConstraints = false
+        AppTheme.applyGlow(to: progressBar, color: AppTheme.primaryAccent, radius: 4, opacity: 0.8)
         progressTrack.addSubview(progressBar)
 
         progressWidthConstraint = progressBar.widthAnchor.constraint(equalTo: progressTrack.widthAnchor, multiplier: 0)
@@ -812,13 +831,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
             playOverlay.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             playOverlay.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: -16),
-            playOverlay.widthAnchor.constraint(equalToConstant: 36),
-            playOverlay.heightAnchor.constraint(equalToConstant: 36),
+            playOverlay.widthAnchor.constraint(equalToConstant: 40),
+            playOverlay.heightAnchor.constraint(equalToConstant: 40),
 
             playIcon.centerXAnchor.constraint(equalTo: playOverlay.contentView.centerXAnchor, constant: 1),
             playIcon.centerYAnchor.constraint(equalTo: playOverlay.contentView.centerYAnchor),
-            playIcon.widthAnchor.constraint(equalToConstant: 14),
-            playIcon.heightAnchor.constraint(equalToConstant: 14),
+            playIcon.widthAnchor.constraint(equalToConstant: 16),
+            playIcon.heightAnchor.constraint(equalToConstant: 16),
 
             titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -10),
@@ -831,14 +850,14 @@ final class ContinueWatchingCell: UICollectionViewCell {
             progressTrack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             progressTrack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             progressTrack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            progressTrack.heightAnchor.constraint(equalToConstant: 3.5),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4.0),
 
             progressBar.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             progressBar.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             progressBar.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor)
         ])
 
-        AppTheme.applyGlow(to: self, color: UIColor.black, radius: 8, opacity: 0.25)
+        AppTheme.applyGlow(to: self, color: UIColor.black, radius: 10, opacity: 0.35)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -940,7 +959,7 @@ class MovieCell: UICollectionViewCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         contentView.backgroundColor = AppTheme.cardBackground
-        contentView.layer.cornerRadius = 16
+        contentView.layer.cornerRadius = 18
         contentView.layer.borderWidth = 1
         contentView.layer.borderColor = AppTheme.borderGlass.cgColor
         contentView.clipsToBounds = true
@@ -949,12 +968,13 @@ class MovieCell: UICollectionViewCell {
         imageView.clipsToBounds = true
         imageView.translatesAutoresizingMaskIntoConstraints = false
 
+        // Multi-stop Cinematic Dark Scrim Gradient
         gradientLayer.colors = [
             UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.3).cgColor,
+            UIColor.black.withAlphaComponent(0.25).cgColor,
             UIColor.black.withAlphaComponent(0.92).cgColor
         ]
-        gradientLayer.locations = [0.35, 0.65, 1.0]
+        gradientLayer.locations = [0.30, 0.60, 1.0]
 
         titleLabel.font = AppTheme.Fonts.subhead(size: 13)
         titleLabel.textColor = AppTheme.textPrimary
@@ -966,17 +986,26 @@ class MovieCell: UICollectionViewCell {
         epsLabel.textAlignment = .center
         epsLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        epsBackground.contentView.backgroundColor = AppTheme.primaryAccent.withAlphaComponent(0.35)
-        epsBackground.layer.cornerRadius = 8
-        epsBackground.layer.borderWidth = 0.5
-        epsBackground.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        // VIP Glassmorphism Frosted Badge with Specular Border
+        epsBackground.contentView.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        epsBackground.layer.cornerRadius = 9
+        epsBackground.layer.borderWidth = 0.8
+        epsBackground.layer.borderColor = AppTheme.borderHighlight.cgColor
         epsBackground.clipsToBounds = true
         epsBackground.translatesAutoresizingMaskIntoConstraints = false
+
+        let liveDot = UIView()
+        liveDot.backgroundColor = AppTheme.primaryAccent
+        liveDot.layer.cornerRadius = 3
+        liveDot.clipsToBounds = true
+        liveDot.translatesAutoresizingMaskIntoConstraints = false
+        AppTheme.applyGlow(to: liveDot, color: AppTheme.primaryAccent, radius: 4, opacity: 0.8)
 
         contentView.addSubview(imageView)
         imageView.layer.addSublayer(gradientLayer)
         contentView.addSubview(titleLabel)
         contentView.addSubview(epsBackground)
+        epsBackground.contentView.addSubview(liveDot)
         epsBackground.contentView.addSubview(epsLabel)
 
         NSLayoutConstraint.activate([
@@ -993,8 +1022,13 @@ class MovieCell: UICollectionViewCell {
             epsBackground.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
             epsBackground.heightAnchor.constraint(equalToConstant: 22),
 
-            epsLabel.leadingAnchor.constraint(equalTo: epsBackground.contentView.leadingAnchor, constant: 6),
-            epsLabel.trailingAnchor.constraint(equalTo: epsBackground.contentView.trailingAnchor, constant: -6),
+            liveDot.leadingAnchor.constraint(equalTo: epsBackground.contentView.leadingAnchor, constant: 7),
+            liveDot.centerYAnchor.constraint(equalTo: epsBackground.contentView.centerYAnchor),
+            liveDot.widthAnchor.constraint(equalToConstant: 6),
+            liveDot.heightAnchor.constraint(equalToConstant: 6),
+
+            epsLabel.leadingAnchor.constraint(equalTo: liveDot.trailingAnchor, constant: 5),
+            epsLabel.trailingAnchor.constraint(equalTo: epsBackground.contentView.trailingAnchor, constant: -7),
             epsLabel.centerYAnchor.constraint(equalTo: epsBackground.contentView.centerYAnchor)
         ])
         setupShadow()

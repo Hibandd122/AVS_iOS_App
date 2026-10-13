@@ -18,6 +18,12 @@ class MovieInfoViewController: UIViewController {
     private let loader = UIActivityIndicatorView(style: .medium)
     private let descSkeleton = SkeletonView()
 
+    private let episodesContainer = UIView()
+    private let quickEpisodesTitle = UILabel()
+    private let viewAllEpisodesLink = UIButton(type: .system)
+    private let quickEpisodeScroll = UIScrollView()
+    private let quickEpisodeStack = UIStackView()
+
     private var episodes: [Episode] = []
     private var details: MovieDetails?
     private var resumeEpisodeIndex: Int?
@@ -33,6 +39,19 @@ class MovieInfoViewController: UIViewController {
         title = movie.title
 
         view.backgroundColor = AppTheme.backgroundDark
+
+        let bg = BackgroundView()
+        bg.setStyle(.accent)
+        bg.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bg)
+        view.sendSubviewToBack(bg)
+        NSLayoutConstraint.activate([
+            bg.topAnchor.constraint(equalTo: view.topAnchor),
+            bg.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bg.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bg.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         setupNavBar()
         setupViews()
         bindMovie()
@@ -201,19 +220,80 @@ class MovieInfoViewController: UIViewController {
 
         loader.startAnimating()
 
-        let allEpisodesButton = UIButton(type: .system)
-        allEpisodesButton.setTitle("Danh sách tập", for: .normal)
-        allEpisodesButton.setImage(UIImage(systemName: "list.bullet.rectangle"), for: .normal)
-        allEpisodesButton.accessibilityLabel = "Danh sách tập"
-        styleAccentButton(allEpisodesButton, accent: false)
-        allEpisodesButton.addTarget(self, action: #selector(showAllEpisodes), for: .touchUpInside)
+        // Quick Episode Carousel Container
+        episodesContainer.translatesAutoresizingMaskIntoConstraints = false
+        episodesContainer.isHidden = true
+
+        let headerRow = UIStackView()
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.distribution = .equalSpacing
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let headerIndicator = UIView()
+        headerIndicator.backgroundColor = AppTheme.primaryAccent
+        headerIndicator.layer.cornerRadius = 2
+        headerIndicator.clipsToBounds = true
+        headerIndicator.translatesAutoresizingMaskIntoConstraints = false
+        AppTheme.applyGlow(to: headerIndicator, color: AppTheme.primaryAccent, radius: 4, opacity: 0.8)
+
+        quickEpisodesTitle.font = AppTheme.Fonts.sectionHeader(size: 16)
+        quickEpisodesTitle.textColor = AppTheme.textPrimary
+        quickEpisodesTitle.text = "TẬP PHIM"
+
+        let titleGroup = UIStackView(arrangedSubviews: [headerIndicator, quickEpisodesTitle])
+        titleGroup.axis = .horizontal
+        titleGroup.spacing = 8
+        titleGroup.alignment = .center
+
+        viewAllEpisodesLink.setTitle("Xem tất cả ›", for: .normal)
+        viewAllEpisodesLink.setTitleColor(AppTheme.secondaryAccent, for: .normal)
+        viewAllEpisodesLink.titleLabel?.font = AppTheme.Fonts.subhead(size: 14)
+        viewAllEpisodesLink.addTarget(self, action: #selector(showAllEpisodes), for: .touchUpInside)
+
+        headerRow.addArrangedSubview(titleGroup)
+        headerRow.addArrangedSubview(viewAllEpisodesLink)
+
+        quickEpisodeScroll.showsHorizontalScrollIndicator = false
+        quickEpisodeScroll.alwaysBounceHorizontal = true
+        quickEpisodeScroll.translatesAutoresizingMaskIntoConstraints = false
+
+        quickEpisodeStack.axis = .horizontal
+        quickEpisodeStack.spacing = 10
+        quickEpisodeStack.alignment = .center
+        quickEpisodeStack.translatesAutoresizingMaskIntoConstraints = false
+        quickEpisodeScroll.addSubview(quickEpisodeStack)
+
+        episodesContainer.addSubview(headerRow)
+        episodesContainer.addSubview(quickEpisodeScroll)
+
+        NSLayoutConstraint.activate([
+            headerIndicator.widthAnchor.constraint(equalToConstant: 4),
+            headerIndicator.heightAnchor.constraint(equalToConstant: 16),
+
+            headerRow.topAnchor.constraint(equalTo: episodesContainer.topAnchor),
+            headerRow.leadingAnchor.constraint(equalTo: episodesContainer.leadingAnchor),
+            headerRow.trailingAnchor.constraint(equalTo: episodesContainer.trailingAnchor),
+
+            quickEpisodeScroll.topAnchor.constraint(equalTo: headerRow.bottomAnchor, constant: 10),
+            quickEpisodeScroll.leadingAnchor.constraint(equalTo: episodesContainer.leadingAnchor),
+            quickEpisodeScroll.trailingAnchor.constraint(equalTo: episodesContainer.trailingAnchor),
+            quickEpisodeScroll.bottomAnchor.constraint(equalTo: episodesContainer.bottomAnchor),
+            quickEpisodeScroll.heightAnchor.constraint(equalToConstant: 48),
+
+            quickEpisodeStack.topAnchor.constraint(equalTo: quickEpisodeScroll.topAnchor),
+            quickEpisodeStack.leadingAnchor.constraint(equalTo: quickEpisodeScroll.leadingAnchor),
+            quickEpisodeStack.trailingAnchor.constraint(equalTo: quickEpisodeScroll.trailingAnchor),
+            quickEpisodeStack.bottomAnchor.constraint(equalTo: quickEpisodeScroll.bottomAnchor),
+            quickEpisodeStack.heightAnchor.constraint(equalTo: quickEpisodeScroll.heightAnchor)
+        ])
 
         descSkeleton.translatesAutoresizingMaskIntoConstraints = false
         descSkeleton.layer.cornerRadius = 16
         descSkeleton.clipsToBounds = true
         descSkeleton.startShimmer()
 
-        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, allEpisodesButton, descSkeleton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
+        [bannerWrap, titleLabel, metaLabel, genreScroll, buttonsRow, episodesContainer, descSkeleton, descLabel, expandDescriptionButton, loader].forEach { stack.addArrangedSubview($0) }
 
         descLabel.isHidden = true
 
@@ -326,8 +406,61 @@ class MovieInfoViewController: UIViewController {
                     self.watchButton.isEnabled = true
                 }
                 self.loadResumeIfAny()
+                self.populateQuickEpisodes()
             }
         }
+    }
+
+    private func populateQuickEpisodes() {
+        quickEpisodeStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        guard !episodes.isEmpty else {
+            episodesContainer.isHidden = true
+            return
+        }
+        episodesContainer.isHidden = false
+        viewAllEpisodesLink.setTitle("Xem tất cả (\(episodes.count)) ›", for: .normal)
+
+        for (index, ep) in episodes.prefix(40).enumerated() {
+            let btn = UIButton(type: .system)
+            let isCurrent = (index == resumeEpisodeIndex)
+            let progress = PlaybackStore.shared.progress(for: ep.link) ?? 0
+            let isWatched = progress > 0.85
+
+            let title = "\(index + 1)"
+            btn.setTitle(isCurrent ? "▶ \(title)" : title, for: .normal)
+            btn.titleLabel?.font = isCurrent ? AppTheme.Fonts.badge(size: 14) : AppTheme.Fonts.subhead(size: 14)
+            btn.tag = index
+            btn.layer.cornerRadius = 14
+            btn.clipsToBounds = true
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+            btn.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+
+            if isCurrent {
+                btn.backgroundColor = AppTheme.primaryAccent
+                btn.setTitleColor(.white, for: .normal)
+                AppTheme.applyGlow(to: btn, color: AppTheme.primaryAccent, radius: 8, opacity: 0.6)
+            } else if isWatched {
+                btn.backgroundColor = AppTheme.cardBackgroundLighter
+                btn.layer.borderWidth = 1
+                btn.layer.borderColor = AppTheme.emeraldSuccess.withAlphaComponent(0.4).cgColor
+                btn.setTitleColor(AppTheme.textSecondary, for: .normal)
+            } else {
+                btn.backgroundColor = AppTheme.cardBackgroundLighter
+                btn.layer.borderWidth = 1
+                btn.layer.borderColor = AppTheme.borderGlass.cgColor
+                btn.setTitleColor(AppTheme.textPrimary, for: .normal)
+            }
+
+            btn.addTarget(self, action: #selector(quickEpisodeTapped(_:)), for: .touchUpInside)
+            quickEpisodeStack.addArrangedSubview(btn)
+        }
+    }
+
+    @objc private func quickEpisodeTapped(_ sender: UIButton) {
+        let index = sender.tag
+        AppTheme.triggerImpactHaptic(style: .medium)
+        openPlayer(at: index)
     }
 
     private func loadResumeIfAny() {
@@ -342,15 +475,18 @@ class MovieInfoViewController: UIViewController {
             guard let index = matchedIndex ?? (episodes.indices.contains(h.lastEpisodeIndex) ? h.lastEpisodeIndex : nil) else {
                 continueButton.isHidden = true
                 resumeEpisodeIndex = nil
+                populateQuickEpisodes()
                 return
             }
             resumeEpisodeIndex = index
             continueButton.setTitle("⏵ Tiếp tục \(h.lastEpisodeTitle)", for: .normal)
             continueButton.isHidden = false
+            populateQuickEpisodes()
             return
         }
         continueButton.isHidden = true
         resumeEpisodeIndex = nil
+        populateQuickEpisodes()
     }
 
     // MARK: - Actions
@@ -390,6 +526,9 @@ class MovieInfoViewController: UIViewController {
     @objc private func showAllEpisodes() {
         let listVC = EpisodeListViewController()
         listVC.movie = movie
+        if !episodes.isEmpty {
+            listVC.episodes = episodes
+        }
         navigationController?.pushViewController(listVC, animated: true)
     }
 

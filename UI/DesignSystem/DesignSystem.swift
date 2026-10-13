@@ -74,6 +74,23 @@ public enum AppTheme {
         view.clipsToBounds = true
     }
 
+    public static func applySpecularGlass(to view: UIView, cornerRadius: CGFloat = 18) {
+        view.backgroundColor = cardBackground.withAlphaComponent(0.85)
+        view.layer.cornerRadius = cornerRadius
+        view.layer.borderWidth = 1.0
+        view.layer.borderColor = borderHighlight.cgColor
+        view.clipsToBounds = true
+        applyGlow(to: view, color: UIColor.black, radius: 10, opacity: 0.35)
+    }
+
+    public static func makeFrostedGlassBlur(style: UIBlurEffect.Style = .systemUltraThinMaterialDark) -> UIVisualEffectView {
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: style))
+        blur.clipsToBounds = true
+        blur.layer.borderWidth = 1
+        blur.layer.borderColor = borderHighlight.cgColor
+        return blur
+    }
+
     public static func applyGlow(to view: UIView, color: UIColor = primaryAccent, radius: CGFloat = 12, opacity: Float = 0.35) {
         view.layer.shadowColor = color.cgColor
         view.layer.shadowRadius = radius
@@ -85,8 +102,14 @@ public enum AppTheme {
     public static func applyPressFeedback(to view: UIView, isPressed: Bool) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
-            view.transform = isPressed ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
+            view.transform = isPressed ? CGAffineTransform(scaleX: 0.95, y: 0.95) : .identity
         }
+    }
+
+    public static func triggerImpactHaptic(style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.prepare()
+        generator.impactOccurred()
     }
     
     // MARK: - Typography Tokens

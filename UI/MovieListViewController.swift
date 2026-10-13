@@ -41,6 +41,19 @@ class MovieListViewController: UIViewController, UICollectionViewDataSource, UIC
         super.viewDidLoad()
         title = source.title
         view.backgroundColor = AppTheme.backgroundDark
+
+        let bgView = BackgroundView()
+        bgView.setStyle(source == .favorites ? .accent : .default)
+        bgView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bgView)
+        view.sendSubviewToBack(bgView)
+        NSLayoutConstraint.activate([
+            bgView.topAnchor.constraint(equalTo: view.topAnchor),
+            bgView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bgView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bgView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         setupCollection()
         setupStateView()
         if source == .history {

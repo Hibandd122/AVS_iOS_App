@@ -15,6 +15,18 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
         self.title = movie?.title
         view.backgroundColor = AppTheme.backgroundDark
 
+        let bgView = BackgroundView()
+        bgView.setStyle(.dark)
+        bgView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bgView)
+        view.sendSubviewToBack(bgView)
+        NSLayoutConstraint.activate([
+            bgView.topAnchor.constraint(equalTo: view.topAnchor),
+            bgView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bgView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bgView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         setupCollectionView()
         setupLoader()
         setupStateView()
@@ -113,7 +125,20 @@ class EpisodeListViewController: UIViewController, UICollectionViewDataSource, U
     private func fetchEpisodes() {
         guard let movie = movie else { return }
         stateView.isHidden = true
-        if episodes.isEmpty { loader.startAnimating() }
+        if !episodes.isEmpty {
+            self.currentEpisodeIndex = self.findCurrentEpisodeIndex(in: self.episodes, movie: movie)
+            self.collectionView.reloadData()
+            if let index = self.currentEpisodeIndex, self.episodes.indices.contains(index) {
+                DispatchQueue.main.async {
+                    guard self.collectionView.numberOfItems(inSection: 0) > index else { return }
+                    self.collectionView.scrollToItem(at: IndexPath(item: index, section: 0),
+                                                     at: .centeredVertically,
+                                                     animated: false)
+                }
+            }
+            return
+        }
+        loader.startAnimating()
         NetworkManager.shared.fetchEpisodes(movieUrl: movie.link) { [weak self] fetched in
             guard let self = self else { return }
             self.episodes = fetched

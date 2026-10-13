@@ -18,6 +18,18 @@ class SearchSuggestionsViewController: UIViewController, UITableViewDataSource, 
         super.viewDidLoad()
         view.backgroundColor = AppTheme.backgroundDark
 
+        let bgView = BackgroundView()
+        bgView.setStyle(.dark)
+        bgView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bgView)
+        view.sendSubviewToBack(bgView)
+        NSLayoutConstraint.activate([
+            bgView.topAnchor.constraint(equalTo: view.topAnchor),
+            bgView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bgView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bgView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         tableView.frame = view.bounds
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         tableView.dataSource = self
@@ -109,14 +121,16 @@ final class SuggestionCell: UITableViewCell {
         selectionStyle = .none
 
         cardView.backgroundColor = AppTheme.cardBackground
-        cardView.layer.cornerRadius = 14
+        cardView.layer.cornerRadius = 16
+        cardView.layer.borderWidth = 1
+        cardView.layer.borderColor = AppTheme.borderGlass.cgColor
         cardView.clipsToBounds = true
         cardView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(cardView)
 
         poster.contentMode = .scaleAspectFill
         poster.clipsToBounds = true
-        poster.layer.cornerRadius = 8
+        poster.layer.cornerRadius = 10
         poster.backgroundColor = AppTheme.surfaceGlass
         poster.translatesAutoresizingMaskIntoConstraints = false
 
